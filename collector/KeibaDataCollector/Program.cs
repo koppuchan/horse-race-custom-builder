@@ -114,6 +114,25 @@ namespace KeibaDataCollector
                         break;
                     }
 
+                    case "score":
+                    {
+                        // 当日出走馬の6ファクターを算出しWordPress(hrc_factors)へ反映する。
+                        // ローカルSQLite（backfill済みの履歴）を読むだけで、JV-Link/UmaConnからは
+                        // 当日の出走表（KettoNum突き合わせ用）のみ取得する。
+                        var wp = new WordPressClient(
+                            AppConfig.WordPressBaseUrl,
+                            AppConfig.WordPressUser,
+                            AppConfig.WordPressAppPassword);
+
+                        using (var store = new HistoricalDataStore(AppConfig.HistoricalDbPath))
+                        {
+                            var scoring = new FactorScoringService(store);
+                            RunScoreFor(jvLink, wp, scoring);
+                            RunScoreFor(umaConn, wp, scoring);
+                        }
+                        break;
+                    }
+
                     case "probe":
                         // 調査用。どのデータ種別で何が取得できるかを実際に叩いて確認する
                         // （地方競馬でオッズ・人気が別種別で提供されていないかの確認用）。
@@ -157,10 +176,12 @@ namespace KeibaDataCollector
                         break;
 
                     default:
-                        Console.WriteLine("使い方: KeibaDataCollector.exe [setup|morning|predict|watch|probe|backfill|dbstats]");
+                        Console.WriteLine("使い方: KeibaDataCollector.exe [setup|morning|predict|score|watch|probe|backfill|dbstats]");
                         Console.WriteLine("  setup    : 初回のみ。利用キー等をGUIダイアログで設定する。");
                         Console.WriteLine("  morning  : 朝一バッチ。当日の出走表を取得しWordPressへ反映する。");
                         Console.WriteLine("  predict  : 朝一オッズの人気順から予想印を生成しWordPressへ反映する。");
+                        Console.WriteLine("  score    : 当日出走馬の6ファクターを算出しWordPress(hrc_factors)へ反映する。");
+                        Console.WriteLine("            事前にbackfillで履歴を蓄積しておく必要がある。");
                         Console.WriteLine("  watch    : レース確定を監視し、結果・払戻を随時WordPressへ反映する。");
                         Console.WriteLine("  probe    : 調査用。どのデータ種別で何が取得できるか確認する（WordPressへは書き込まない）。");
                         Console.WriteLine("            レースを指定する場合: probe 20260811-46-1R");
@@ -279,6 +300,19 @@ namespace KeibaDataCollector
                 // 片方のソースが失敗しても、もう片方は動かす。ただし失敗は終了コードに残す。
                 // 予想が出ないことに気付けないと、お客様からの指摘で初めて分かることになる。
                 LogFailure(source.SourceName, "予想の生成に失敗（このソースのみスキップして続行）", ex);
+            }
+        }
+
+        private static void RunScoreFor(JvSpecComDataSource source, WordPress.WordPressClient wp, FactorScoringService scoring)
+        {
+            try
+            {
+                source.Initialize(AppConfig.JvLinkSoftwareId);
+                new FactorPublishService(source, wp, scoring).RunForToday(DateTime.Today);
+            }
+            catch (Exception ex)
+            {
+                LogFailure(source.SourceName, "6ファクター算出に失敗（このソースのみスキップして続行）", ex);
             }
         }
 

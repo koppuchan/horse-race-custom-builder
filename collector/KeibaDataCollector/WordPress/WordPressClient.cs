@@ -130,6 +130,42 @@ namespace KeibaDataCollector.WordPress
             return true;
         }
 
+        /// <summary>6ファクター（hrc_factors、馬番=>{paramBias等}）をWordPressへ反映する。
+        /// predictionsと同じ「馬番文字列キー」の取り決め。race_card等の既存メタは一切送らない
+        /// （UpsertPredictionsAsyncと同じ理由: 別バッチが持つ項目を上書きしない）。
+        /// nullのファクターは送らない（未算出であることが分かるよう、フィールド自体を省く）。</summary>
+        public async Task UpsertFactorsAsync(RaceKey key, Dictionary<int, FactorScores> scoresByUmaban)
+        {
+            var existing = await FindPostByRaceKeyAsync(key.AsSlug());
+            var suffix = existing != null && existing.HasRaceResult ? "結果" : "出走表";
+
+            var byUmaban = new Dictionary<string, object>();
+            foreach (var kv in scoresByUmaban)
+            {
+                var s = kv.Value;
+                var fields = new Dictionary<string, double>();
+                if (s.ParamBias.HasValue) fields["paramBias"] = s.ParamBias.Value;
+                if (s.ParamPace.HasValue) fields["paramPace"] = s.ParamPace.Value;
+                if (s.ParamAgariQ.HasValue) fields["paramAgariQ"] = s.ParamAgariQ.Value;
+                if (s.ParamJockeyRoi.HasValue) fields["paramJockeyRoi"] = s.ParamJockeyRoi.Value;
+                if (s.ParamPedigreeFit.HasValue) fields["paramPedigreeFit"] = s.ParamPedigreeFit.Value;
+                if (s.ParamTrainingAcc.HasValue) fields["paramTrainingAcc"] = s.ParamTrainingAcc.Value;
+                byUmaban[kv.Key.ToString()] = fields;
+            }
+
+            var payload = new
+            {
+                title = $"{key.RaceDate:yyyy/MM/dd} {key.TrackCode} {key.RaceNumber}R {suffix}",
+                status = "publish",
+                meta = new
+                {
+                    race_key = key.AsSlug(),
+                    hrc_factors = JsonConvert.SerializeObject(byUmaban),
+                }
+            };
+            await SendAsync(existing?.Id, payload);
+        }
+
         // レースキーごとに、最後に送信した内容を保持する。watchモードは確定するまで同じレースを
         // 繰り返しポーリングするため、これが無いと内容が1文字も変わっていなくても
         // ポーリング間隔ごとにWordPressへ書き込み続けてしまう（実機で確認: 速報段階のまま

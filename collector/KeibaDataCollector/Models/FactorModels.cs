@@ -79,4 +79,28 @@ namespace KeibaDataCollector.Models
         public string HansyokuNum { get; set; }
         public string Bamei { get; set; }
     }
+
+    /// <summary>FactorScoringServiceへの入力。今日出走する1頭分の、レース側から分かる情報。
+    /// KettoNum以外はすべてそのレースの出走表（race_card）から埋める想定。</summary>
+    public class FactorScoringInput
+    {
+        public string KettoNum { get; set; }
+        public string TrackCode { get; set; }
+        public int Distance { get; set; }
+        public string TrackSurfaceCode { get; set; }
+        public int Waku { get; set; }
+        public string JockeyCode { get; set; }
+    }
+
+    /// <summary>6ファクターの算出結果（0〜100点、算出できないものはnull）。
+    /// WordPress側のhrc_factorsキー名（paramBias等）にそのまま対応する。</summary>
+    public class FactorScores
+    {
+        public double? ParamBias { get; set; }         // ①枠・馬場バイアス
+        public double? ParamPace { get; set; }          // ②テン速度・展開
+        public double? ParamAgariQ { get; set; }        // ③上がり3F質・末脚
+        public double? ParamJockeyRoi { get; set; }      // ④騎手コース回収率
+        public double? ParamPedigreeFit { get; set; }    // ⑤血統適性・妙味
+        public double? ParamTrainingAcc { get; set; }    // ⑥調教・加速ラップ
+    }
 }

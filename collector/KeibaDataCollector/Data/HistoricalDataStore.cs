@@ -21,6 +21,12 @@ namespace KeibaDataCollector.Data
     {
         private readonly SQLiteConnection _conn;
 
+        /// <summary>FactorScoringService向け。集計クエリは組み合わせが多く、
+        /// その都度専用メソッドを増やすより素直にSQLを書かせた方が見通しが良いため、
+        /// 読み取り専用の利用を前提にコネクションを公開する（同一アセンブリ内のみ）。
+        /// スキーマ変更・書き込みは引き続きこのクラスのメソッド経由に統一する。</summary>
+        internal SQLiteConnection Connection => _conn;
+
         public HistoricalDataStore(string dbPath)
         {
             var dir = Path.GetDirectoryName(dbPath);
