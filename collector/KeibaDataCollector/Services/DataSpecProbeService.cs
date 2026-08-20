@@ -22,6 +22,13 @@ namespace KeibaDataCollector.Services
     {
         private const string EarlyAnchorFromTime = "19860101000000";
 
+        // SetupSpecsToProbeのSetup(3)テストで使う。1986年を指定すると全履歴（数百万件）を
+        // 読み切るまで終わらず、probeの趣旨（軽く確認する）から外れるため、BackfillServiceと
+        // 同じ「過去3年」に絞る。EarlyAnchorFromTime（today's raceの検索用、option=2なので
+        // fromtimeの影響が薄い）とは用途が違うため別定数にしている。
+        private static readonly string SetupProbeFromTime =
+            DateTime.Today.AddYears(-3).ToString("yyyyMMddHHmmss");
+
         // JV-Data仕様書「（２）速報系データ」より。
         private static readonly (string Spec, string Name)[] RealtimeSpecsToProbe =
         {
@@ -101,7 +108,7 @@ namespace KeibaDataCollector.Services
             var succeeded = false;
             foreach (var option in SetupOptionCandidates)
             {
-                var open = _source.Open(dataSpec, EarlyAnchorFromTime, option);
+                var open = _source.Open(dataSpec, SetupProbeFromTime, option);
                 if (open.ReturnCode >= 0)
                 {
                     succeeded = true;

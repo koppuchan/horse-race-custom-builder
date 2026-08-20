@@ -22,9 +22,17 @@ namespace KeibaDataCollector.Services
         private readonly IRaceDataSource _source;
         private readonly HistoricalDataStore _store;
 
-        // JVOpenのfromtimeは option=Setup では実質無視され全期間が対象になる
-        // （RaceCardServiceのEarlyAnchorFromTimeと同じ理由）。
-        private const string EarlyAnchorFromTime = "19860101000000";
+        // お客様の要望（過去3年分あれば十分）に合わせて絞り込む。
+        // 実機確認では option=Normal(1) は直近1年、option=Setup(3) は
+        // dataspecの提供開始日（SLOP:2003年〜等）から全件、という挙動だった。
+        // fromtimeがSetupモードの絞り込みに実際に効くかは未検証だが、開発者コミュニティには
+        // 「option=3でも指定したfromtimeより古いデータは除外される」という報告がある。
+        // 3年分に絞れば、1年で約55万件（坂路調教）だった実測値から、23年分(1986〜)の
+        // 代わりに3年分（約165万件）程度に収まる想定。fromtimeが効かず全件返ってきた場合は、
+        // 取り込み時にRaceDate等でフィルタする対応に切り替えること
+        // （BackfillFromTimeが効いているかは、日付範囲ログで必ず確認する）。
+        private static readonly string BackfillFromTime =
+            DateTime.Today.AddYears(-3).ToString("yyyyMMddHHmmss");
 
         // この件数ごとにトランザクションをコミットし、進捗をログに出す。
         // 1件ずつコミットすると数百万件規模でfsyncがボトルネックになり現実的な時間で終わらない。
@@ -43,7 +51,7 @@ namespace KeibaDataCollector.Services
         /// 件数を最後にログへ出す（無言で欠落させない）。</summary>
         public void BackfillRaceEntries()
         {
-            var open = _source.Open("RACE", EarlyAnchorFromTime, DataOption.Setup);
+            var open = _source.Open("RACE", BackfillFromTime, DataOption.Setup);
             if (open.ReturnCode == -1)
             {
                 _source.Close();
@@ -149,7 +157,7 @@ namespace KeibaDataCollector.Services
             // 実機確認: DataOption.Normal(1)は「有効なoption」ではあるものの、
             // 実際には直近およそ1年分しか返さなかった（日付範囲ログで確認）。
             // 全履歴（SLOPは2003年以降、WOODは2021年以降）を取るにはSetup(3)が必要。
-            var open = _source.Open(dataSpec, EarlyAnchorFromTime, DataOption.Setup);
+            var open = _source.Open(dataSpec, BackfillFromTime, DataOption.Setup);
             if (open.ReturnCode == -1)
             {
                 _source.Close();
@@ -218,7 +226,7 @@ namespace KeibaDataCollector.Services
             // BackfillTrainingと同じ理由でSetup(3)を使う。実機確認で、Normal(1)だと
             // SK:8,302件（≒1年分の新規産駒登録数）しか取れず、1986年以降の全履歴には
             // 遠く及ばなかった。
-            var open = _source.Open("BLOD", EarlyAnchorFromTime, DataOption.Setup);
+            var open = _source.Open("BLOD", BackfillFromTime, DataOption.Setup);
             if (open.ReturnCode == -1)
             {
                 _source.Close();
