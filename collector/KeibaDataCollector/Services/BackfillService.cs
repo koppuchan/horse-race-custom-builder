@@ -13,7 +13,7 @@ namespace KeibaDataCollector.Services
     /// （中央+地方で数年分、件数は数十万〜数百万レコード規模になりうる）。
     ///
     /// 実行前に必ず"probe"コマンド（DataSpecProbeService）で、対象データ種別
-    /// （RACE/SLOP/WOOD/BLDN）が実際に読めるかを軽い範囲で確認してから流すこと。
+    /// （RACE/SLOP/WOOD/BLOD）が実際に読めるかを軽い範囲で確認してから流すこと。
     /// dataspec名やレコードの並び順の一部（血統の父・母父インデックス等）はコード内コメントの通り
     /// 未検証の前提を含むため、いきなり全件流す前に少量で検算するのが安全。
     /// </summary>
@@ -212,7 +212,7 @@ namespace KeibaDataCollector.Services
             Console.WriteLine($"[{_source.SourceName}] {dataSpec}取り込み完了: 全{totalRecords}件中{expectedTypeId}={matched}件{dateRange}");
         }
 
-        /// <summary>血統（BLDN dataspec, "SK"産駒マスタ・"HN"繁殖馬マスタ）を取り込む。</summary>
+        /// <summary>血統（BLOD dataspec, "SK"産駒マスタ・"HN"繁殖馬マスタ）を取り込む。</summary>
         public void BackfillPedigree()
         {
             // BackfillTrainingと同じ理由でNormal(1)を使う。
@@ -221,21 +221,21 @@ namespace KeibaDataCollector.Services
             // 産駒の生年(BirthDate)の分布を確認し、古い年の産駒が少なすぎないか検算すること
             // （現状のBackfillPedigreeはBirthDateを保存していないため、確認には
             // PedigreeLinkへのBirthDate追加が別途必要）。
-            var open = _source.Open("BLDN", EarlyAnchorFromTime, DataOption.Normal);
+            var open = _source.Open("BLOD", EarlyAnchorFromTime, DataOption.Normal);
             if (open.ReturnCode == -1)
             {
                 _source.Close();
-                Console.WriteLine($"[{_source.SourceName}] BLDN: 該当データなし（このソースでは提供されていない可能性）。");
+                Console.WriteLine($"[{_source.SourceName}] BLOD: 該当データなし（このソースでは提供されていない可能性）。");
                 return;
             }
             if (open.ReturnCode < 0)
             {
                 _source.Close();
-                Console.WriteLine($"[{_source.SourceName}] BLDN Open失敗: {open.ReturnCode}（血統データのみスキップして続行）");
+                Console.WriteLine($"[{_source.SourceName}] BLOD Open失敗: {open.ReturnCode}（血統データのみスキップして続行）");
                 return;
             }
 
-            Console.WriteLine($"[{_source.SourceName}] BLDN 全履歴取得を開始します。");
+            Console.WriteLine($"[{_source.SourceName}] BLOD 全履歴取得を開始します。");
 
             int totalRecords = 0, skCount = 0, hnCount = 0;
             int? minBirthYear = null, maxBirthYear = null;
@@ -279,7 +279,7 @@ namespace KeibaDataCollector.Services
                     {
                         batch.Dispose();
                         batch = _store.BeginBatch();
-                        Console.WriteLine($"[{_source.SourceName}] BLDN進捗: {totalRecords}件処理（SK:{skCount} HN:{hnCount}）");
+                        Console.WriteLine($"[{_source.SourceName}] BLOD進捗: {totalRecords}件処理（SK:{skCount} HN:{hnCount}）");
                     }
                 }
             }
@@ -290,7 +290,7 @@ namespace KeibaDataCollector.Services
             }
 
             var birthYearRange = minBirthYear.HasValue ? $" 産駒の生年範囲=[{minBirthYear}〜{maxBirthYear}]" : "";
-            Console.WriteLine($"[{_source.SourceName}] BLDN取り込み完了: 全{totalRecords}件, SK={skCount}, HN={hnCount}{birthYearRange}");
+            Console.WriteLine($"[{_source.SourceName}] BLOD取り込み完了: 全{totalRecords}件, SK={skCount}, HN={hnCount}{birthYearRange}");
         }
 
         private static string RaceInfoKey(string year, string monthDay, string jyoCd, string raceNum) =>

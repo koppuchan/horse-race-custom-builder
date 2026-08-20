@@ -47,7 +47,7 @@ namespace KeibaDataCollector.Services
         /// </param>
         public void Run(DateTime targetDate, string raceKeySlug = null)
         {
-            // SetupSpecsToProbe（SLOP/WOOD/BLDN）は特定レースに紐付かないため、
+            // SetupSpecsToProbe（SLOP/WOOD/BLOD）は特定レースに紐付かないため、
             // 「本日のレースが見つかるか」に関係なく必ず実行する。
             // 以前はこのチェックより後段にあったため、中央競馬の非開催日に丸ごとスキップされていた
             // （UmaConn側の地方競馬は開催があっても、JV-Link側はそのまま何も調べずに終わっていた）。
@@ -78,7 +78,7 @@ namespace KeibaDataCollector.Services
         {
             ("SLOP", "坂路調教（HCレコード）"),
             ("WOOD", "ウッドチップ調教（WCレコード）"),
-            ("BLDN", "血統：産駒マスタ(SK)・繁殖馬マスタ(HN)"),
+            ("BLOD", "血統：産駒マスタ(SK)・繁殖馬マスタ(HN)"),
         };
 
         // rc=-116（dataspecとoptionの組み合わせが不正）が出た実機確認結果を受けて追加。
@@ -119,7 +119,7 @@ namespace KeibaDataCollector.Services
             var typeCounts = new Dictionary<string, int>();
             // HC/WCは日付範囲を見て、実際に何年分取れているか（全履歴なのか直近の差分だけなのか）を
             // 判断する材料にする。件数だけでは「多いから全履歴」と誤解しかねない
-            // （実機確認: BLDNのSKは8,302件しか無く、全履歴にしては少なすぎた）。
+            // （実機確認: BLODのSKは8,302件しか無く、全履歴にしては少なすぎた）。
             DateTime? minDate = null, maxDate = null;
             try
             {

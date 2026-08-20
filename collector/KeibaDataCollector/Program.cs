@@ -190,8 +190,8 @@ namespace KeibaDataCollector
             }
         }
 
-        /// <summary>4種類のバックフィル（RACE/SLOP/WOOD/BLDN）を1ソース分まとめて実行する。
-        /// それぞれ独立してtry/catchする: 例えば血統(BLDN)がこの契約では提供されていない場合でも、
+        /// <summary>4種類のバックフィル（RACE/SLOP/WOOD/BLOD）を1ソース分まとめて実行する。
+        /// それぞれ独立してtry/catchする: 例えば血統(BLOD)がこの契約では提供されていない場合でも、
         /// レース履歴(RACE)や調教データだけは取り込めるようにするため。</summary>
         private static void RunBackfillFor(JvSpecComDataSource source, HistoricalDataStore store)
         {
@@ -210,7 +210,7 @@ namespace KeibaDataCollector
             RunOneBackfillStep(source.SourceName, "RACE(レース履歴)", backfill.BackfillRaceEntries);
             RunOneBackfillStep(source.SourceName, "SLOP(坂路調教)", backfill.BackfillSlopeTraining);
             RunOneBackfillStep(source.SourceName, "WOOD(ウッドチップ調教)", backfill.BackfillWoodChipTraining);
-            RunOneBackfillStep(source.SourceName, "BLDN(血統)", backfill.BackfillPedigree);
+            RunOneBackfillStep(source.SourceName, "BLOD(血統)", backfill.BackfillPedigree);
         }
 
         private static void RunOneBackfillStep(string sourceName, string stepName, Action step)

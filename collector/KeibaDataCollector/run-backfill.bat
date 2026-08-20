@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 REM 6-factor historical backfill. VERY slow (potentially hours to days) - run "run-probe.bat"
-REM first and confirm SLOP/WOOD/BLDN show up before running this for real.
+REM first and confirm SLOP/WOOD/BLOD show up before running this for real.
 REM Writes nothing to WordPress; only fills the local SQLite file (data\historical.sqlite3).
 REM Optional argument: jv (central racing only) / uma (local racing only). Default: both.
 REM
