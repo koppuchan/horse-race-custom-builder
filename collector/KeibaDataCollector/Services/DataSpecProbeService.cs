@@ -81,12 +81,16 @@ namespace KeibaDataCollector.Services
             ("BLOD", "血統：産駒マスタ(SK)・繁殖馬マスタ(HN)"),
         };
 
-        // rc=-116（dataspecとoptionの組み合わせが不正）が出た実機確認結果を受けて追加。
-        // 蓄積系/マスタ系データはThisWeekAndToday(2)に対応していない場合があるため、
-        // 候補を順に試し、最初に成功したoptionを使う。全滅した場合のみ全結果をログに出す。
+        // 実機確認の結果、option=Normal(1)は「全履歴」ではなく直近およそ1年分しか返さない
+        // ことが判明した（SLOP/WOODとも日付範囲が丁度1年だった）。JV-Data仕様書の
+        // 「optionとdataspecの関係」表ではBLOD/SLOP/WOODはoption=1・3/4のどちらも
+        // 「有効な組み合わせ」と書かれているが、有効＝全履歴という意味ではなかった。
+        // Setup(3)を優先的に試し、Normal(1)は比較用に別途取得する
+        // （最初に成功したoptionで打ち切らず、両方の日付範囲を並べて比較できるようにする）。
         private static readonly DataOption[] SetupOptionCandidates =
         {
-            DataOption.Normal,           // 1: 通常データ（差分）
+            DataOption.Setup,            // 3: セットアップデータ（全履歴を期待）
+            DataOption.Normal,           // 1: 通常データ（実機確認: 直近約1年のみ）
             DataOption.ThisWeekAndToday, // 2
             DataOption.SetupThisWeek,    // 4: 今週分のセットアップ
         };
@@ -94,24 +98,35 @@ namespace KeibaDataCollector.Services
         private void ProbeSetupSpec(string dataSpec, string specName)
         {
             var attempts = new List<string>();
+            var succeeded = false;
             foreach (var option in SetupOptionCandidates)
             {
                 var open = _source.Open(dataSpec, EarlyAnchorFromTime, option);
                 if (open.ReturnCode >= 0)
                 {
+                    succeeded = true;
                     Console.WriteLine($"[{_source.SourceName}] {dataSpec}({specName}): option={option}(rc={open.ReturnCode}) で成功。");
                     ReadAndReportTypeBreakdown(dataSpec, specName);
-                    return;
+                    // Setup(3)がNormal(1)より多くの期間をカバーするか比較したいため、
+                    // 成功しても打ち切らず全候補を試す（以前は最初の成功で return していた）。
+                    continue;
                 }
 
                 attempts.Add($"option={option}→rc={open.ReturnCode}");
                 _source.Close();
             }
 
-            Console.WriteLine(
-                $"[{_source.SourceName}] {dataSpec}({specName}): 全option失敗 [{string.Join(", ", attempts)}]" +
-                "（dataspec名自体が違う可能性。rc=-111ならパラメータ不正＝dataspec名の誤り、" +
-                "rc=-116ならoptionとの組み合わせ不正＝別のoption値を試す必要あり）");
+            if (!succeeded)
+            {
+                Console.WriteLine(
+                    $"[{_source.SourceName}] {dataSpec}({specName}): 全option失敗 [{string.Join(", ", attempts)}]" +
+                    "（dataspec名自体が違う可能性。rc=-111ならパラメータ不正＝dataspec名の誤り、" +
+                    "rc=-116ならoptionとの組み合わせ不正＝別のoption値を試す必要あり）");
+            }
+            else if (attempts.Count > 0)
+            {
+                Console.WriteLine($"[{_source.SourceName}] {dataSpec}({specName}): 失敗したoption [{string.Join(", ", attempts)}]");
+            }
         }
 
         private void ReadAndReportTypeBreakdown(string dataSpec, string specName)
@@ -143,6 +158,9 @@ namespace KeibaDataCollector.Services
                     {
                         if (typeId == "HC") recordDate = JvFactorRecordParser.ParseSlopeTraining(buffer).ChokyoDate;
                         else if (typeId == "WC") recordDate = JvFactorRecordParser.ParseWoodChipTraining(buffer).ChokyoDate;
+                        // SKは調教年月日を持たないため、産駒の生年月日で代用する
+                        // （血統データの取得範囲確認: 1986年以降のはずが直近だけになっていないか）。
+                        else if (typeId == "SK") recordDate = JvFactorRecordParser.ParseOffspringPedigree(buffer).BirthDate;
                     }
                     catch
                     {

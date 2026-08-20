@@ -146,10 +146,10 @@ namespace KeibaDataCollector.Services
 
         private void BackfillTraining(string dataSpec, string expectedTypeId)
         {
-            // DataOption.Setup(3)は未検証。実機のprobeで DataOption.Normal(1) が
-            // rc=0 で成功することを確認済み（JV-Link/中央競馬でHC:548,966件・WC:162,857件取得）。
-            // Setupではなくこちらを使う。
-            var open = _source.Open(dataSpec, EarlyAnchorFromTime, DataOption.Normal);
+            // 実機確認: DataOption.Normal(1)は「有効なoption」ではあるものの、
+            // 実際には直近およそ1年分しか返さなかった（日付範囲ログで確認）。
+            // 全履歴（SLOPは2003年以降、WOODは2021年以降）を取るにはSetup(3)が必要。
+            var open = _source.Open(dataSpec, EarlyAnchorFromTime, DataOption.Setup);
             if (open.ReturnCode == -1)
             {
                 _source.Close();
@@ -215,13 +215,10 @@ namespace KeibaDataCollector.Services
         /// <summary>血統（BLOD dataspec, "SK"産駒マスタ・"HN"繁殖馬マスタ）を取り込む。</summary>
         public void BackfillPedigree()
         {
-            // BackfillTrainingと同じ理由でNormal(1)を使う。
-            // ただし実機のprobeでは SK:8,302件 と、HC/WCに比べて少なかった。
-            // 全履歴ではなく直近の差分だけの可能性があるため、取り込み後は必ず
-            // 産駒の生年(BirthDate)の分布を確認し、古い年の産駒が少なすぎないか検算すること
-            // （現状のBackfillPedigreeはBirthDateを保存していないため、確認には
-            // PedigreeLinkへのBirthDate追加が別途必要）。
-            var open = _source.Open("BLOD", EarlyAnchorFromTime, DataOption.Normal);
+            // BackfillTrainingと同じ理由でSetup(3)を使う。実機確認で、Normal(1)だと
+            // SK:8,302件（≒1年分の新規産駒登録数）しか取れず、1986年以降の全履歴には
+            // 遠く及ばなかった。
+            var open = _source.Open("BLOD", EarlyAnchorFromTime, DataOption.Setup);
             if (open.ReturnCode == -1)
             {
                 _source.Close();

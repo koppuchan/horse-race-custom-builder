@@ -61,8 +61,9 @@ namespace KeibaDataCollector.Models
         public string BroodmareSireHansyokuNum { get; set; } // 母父
 
         /// <summary>対象馬の生年月日。バックフィル時の取得範囲確認用
-        /// （BLODをNormalオプションで取っても全履歴になっているか不明なため、
-        /// 産駒の生年分布で検算する）。DBには保存せず、ログ集計にのみ使う。</summary>
+        /// （実機確認: option=Normalだと直近1年分しか取れなかったため、Setupに変更した。
+        /// Setupで本当に1986年以降まで遡れているか、産駒の生年分布で検算する）。
+        /// DBには保存せず、ログ集計にのみ使う。</summary>
         public DateTime BirthDate { get; set; }
     }
 
