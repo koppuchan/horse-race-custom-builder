@@ -35,6 +35,22 @@ namespace KeibaDataCollector.Data
                 Console.WriteLine($"[HistoricalDataStore] 新規DBを作成: {dbPath}");
 
             EnsureSchema();
+            MigrateAddFukushoPayoutColumn();
+        }
+
+        /// <summary>既に稼働中のDB（このカラムが無い状態でbackfill済みのもの）向けの移行措置。
+        /// SQLiteに "ADD COLUMN IF NOT EXISTS" が無いため、重複エラーは無視する。</summary>
+        private void MigrateAddFukushoPayoutColumn()
+        {
+            try
+            {
+                Exec("ALTER TABLE race_entries ADD COLUMN fukusho_payout REAL;");
+                Console.WriteLine("[HistoricalDataStore] race_entries に fukusho_payout 列を追加しました。");
+            }
+            catch (SQLiteException ex) when (ex.Message.IndexOf("duplicate column", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                // 既に列がある（新規作成時のCREATE TABLEで最初から入っている場合）。想定内。
+            }
         }
 
         private void EnsureSchema()
@@ -54,11 +70,13 @@ namespace KeibaDataCollector.Data
                     tansho_odds REAL,
                     agari_3f REAL,
                     corner_passage_4 TEXT,
+                    fukusho_payout REAL,
                     PRIMARY KEY (ketto_num, race_date, track_code, distance)
                 );
                 CREATE INDEX IF NOT EXISTS idx_race_entries_track ON race_entries(track_code, distance, track_surface_code);
                 CREATE INDEX IF NOT EXISTS idx_race_entries_jockey ON race_entries(jockey_code, track_code, distance);
                 CREATE INDEX IF NOT EXISTS idx_race_entries_ketto ON race_entries(ketto_num);
+                CREATE INDEX IF NOT EXISTS idx_race_entries_umaban_lookup ON race_entries(race_date, track_code, distance, umaban);
 
                 CREATE TABLE IF NOT EXISTS training_laps (
                     ketto_num TEXT NOT NULL,
@@ -87,13 +105,17 @@ namespace KeibaDataCollector.Data
         /// 呼び出し側でトランザクションにまとめて使うこと（BeginBatch参照）。</summary>
         public void UpsertRaceEntry(HistoricalRaceEntry e)
         {
+            // fukusho_paypoutは意図的にON CONFLICT DO UPDATE SETに含めていない。
+            // HRはSEより後に届く前提のため、この時点では常にnull。含めてしまうと、
+            // 同じ行の再upsert（RACE再取り込み等）のたびに、UpdateFukushoPayoutで
+            // 既に反映済みの払戻額をnullで上書きしてしまう。
             Exec(@"
                 INSERT INTO race_entries
                     (ketto_num, race_date, track_code, track_surface_code, distance, waku, umaban,
-                     jockey_code, trainer_code, chakujun, tansho_odds, agari_3f, corner_passage_4)
+                     jockey_code, trainer_code, chakujun, tansho_odds, agari_3f, corner_passage_4, fukusho_payout)
                 VALUES
                     (@ketto_num, @race_date, @track_code, @track_surface_code, @distance, @waku, @umaban,
-                     @jockey_code, @trainer_code, @chakujun, @tansho_odds, @agari_3f, @corner_passage_4)
+                     @jockey_code, @trainer_code, @chakujun, @tansho_odds, @agari_3f, @corner_passage_4, @fukusho_payout)
                 ON CONFLICT(ketto_num, race_date, track_code, distance) DO UPDATE SET
                     track_surface_code=excluded.track_surface_code,
                     waku=excluded.waku,
@@ -119,6 +141,27 @@ namespace KeibaDataCollector.Data
                     p.AddWithValue("@tansho_odds", (object)e.TanshoOdds ?? DBNull.Value);
                     p.AddWithValue("@agari_3f", (object)e.Agari3F ?? DBNull.Value);
                     p.AddWithValue("@corner_passage_4", (object)e.CornerPassage4 ?? DBNull.Value);
+                    p.AddWithValue("@fukusho_payout", (object)e.FukushoPayout ?? DBNull.Value);
+                });
+        }
+
+        /// <summary>HR（払戻）レコード側から、既に挿入済みのSE由来の行へ複勝払戻額を反映する。
+        /// ketto_numはHR側に無いため、umaban込みの複合キーで一致させる（1レース内でumabanは一意）。
+        /// 対象行が無くても（RAより前にHRが来る、等の想定外順序）例外にはしない
+        /// （ExecuteNonQueryは0件更新でも成功扱い）。</summary>
+        public void UpdateFukushoPayout(DateTime raceDate, string trackCode, int distance, int umaban, double payoutAmount)
+        {
+            Exec(@"
+                UPDATE race_entries SET fukusho_payout = @payout
+                WHERE race_date = @race_date AND track_code = @track_code
+                  AND distance = @distance AND umaban = @umaban;
+            ",
+                p => {
+                    p.AddWithValue("@payout", payoutAmount);
+                    p.AddWithValue("@race_date", raceDate.ToString("yyyy-MM-dd"));
+                    p.AddWithValue("@track_code", trackCode);
+                    p.AddWithValue("@distance", distance);
+                    p.AddWithValue("@umaban", umaban);
                 });
         }
 
@@ -202,11 +245,19 @@ namespace KeibaDataCollector.Data
         {
             Console.WriteLine("=== race_entries（過去のレース結果。枠バイアス・上がり3F等の集計元） ===");
             using (var cmd = new SQLiteCommand(
-                "SELECT COUNT(*), MIN(race_date), MAX(race_date), COUNT(DISTINCT ketto_num) FROM race_entries;", _conn))
+                "SELECT COUNT(*), MIN(race_date), MAX(race_date), COUNT(DISTINCT ketto_num), " +
+                "SUM(CASE WHEN fukusho_payout IS NOT NULL THEN 1 ELSE 0 END), " +
+                "SUM(CASE WHEN chakujun BETWEEN 1 AND 3 THEN 1 ELSE 0 END) " +
+                "FROM race_entries;", _conn))
             using (var r = cmd.ExecuteReader())
             {
                 if (r.Read())
+                {
+                    var placed = r.GetInt64(5); // 3着以内（複勝払戻が付くはずの行数）
+                    var withPayout = r.GetInt64(4);
                     Console.WriteLine($"件数={r.GetInt64(0)}, 日付範囲=[{ReadOrNull(r, 1)}〜{ReadOrNull(r, 2)}], 対象馬数={r.GetInt64(3)}");
+                    Console.WriteLine($"複勝払戻あり={withPayout}件（3着以内の行数={placed}件。この2つが近ければHR反映は成功）");
+                }
             }
             Console.WriteLine("競馬場コード別内訳（上位20）:");
             using (var cmd = new SQLiteCommand(

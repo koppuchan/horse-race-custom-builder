@@ -44,9 +44,12 @@ namespace KeibaDataCollector.Services
             _store = store;
         }
 
-        /// <summary>レース系（RA/SE）の過去データを取り込む。
+        /// <summary>レース系（RA/SE/HR）の過去データを取り込む。
         /// RAレコードでレースごとの距離・トラック種別を先に押さえ、直後に続くSEレコードに
         /// 反映する想定（JV-Dataは通常レース単位でRA→SE→HRの順に流れる）。
+        /// HR（払戻）は複勝払戻額だけを、対応するSE由来の行にUPDATEで反映する
+        /// （④騎手コース回収率の「回収率」に払戻額が必要なため。単勝回収率はtansho_odds×
+        /// 着順1から計算できるので、単勝払戻は別途持たなくてよい）。
         /// SEがRAより先に来た場合（並び順の想定外れ）は距離・トラック種別が空のまま保存され、
         /// 件数を最後にログへ出す（無言で欠落させない）。</summary>
         public void BackfillRaceEntries()
@@ -66,10 +69,10 @@ namespace KeibaDataCollector.Services
 
             Console.WriteLine($"[{_source.SourceName}] RACE 全履歴取得を開始します（ダウンロード対象 {open.DownloadCount}ファイル）。");
 
-            // レースキー(日付+場コード+R番号)ごとの距離・トラック種別。RA到着時に埋め、SE処理時に参照する。
+            // レースキー(日付+場コード+R番号)ごとの距離・トラック種別。RA到着時に埋め、SE/HR処理時に参照する。
             var raceInfoByKey = new Dictionary<string, (int Distance, string TrackSurfaceCode)>();
 
-            int totalRecords = 0, seRecords = 0, raRecords = 0, missingRaInfo = 0;
+            int totalRecords = 0, seRecords = 0, raRecords = 0, hrRecords = 0, fukushoUpdated = 0, missingRaInfo = 0;
             var batch = _store.BeginBatch();
             try
             {
@@ -126,12 +129,40 @@ namespace KeibaDataCollector.Services
                         if (!string.IsNullOrEmpty(entry.KettoNum) && entry.RaceDate != DateTime.MinValue)
                             _store.UpsertRaceEntry(entry);
                     }
+                    else if (typeId == "HR")
+                    {
+                        hrRecords++;
+                        var hr = new JV_HR_PAY();
+                        hr.SetDataB(ref buffer);
+
+                        // 距離はRACE_IDだけでは分からないため、RA到着時に埋めたraceInfoByKeyを
+                        // SE同様に参照する（HRはRA→SE→HRの順で最後に来る想定なので、通常は既にある）。
+                        var key = RaceInfoKey(hr.id.Year, hr.id.MonthDay, hr.id.JyoCD, hr.id.RaceNum);
+                        if (!raceInfoByKey.TryGetValue(key, out var raceInfo))
+                        {
+                            continue; // 距離が分からない行は更新しようがないためスキップ。
+                        }
+
+                        // 複勝払戻だけを反映する（単勝回収率はrace_entriesのtansho_odds×着順1から
+                        // 計算できるため、複勝以外の券種は6ファクターの集計には不要）。
+                        var (payoutRaceKey, payouts) = JvRecordParser.ParsePayouts(buffer);
+                        foreach (var payout in payouts)
+                        {
+                            if (payout.TicketType != "複勝") continue;
+                            if (!int.TryParse(payout.Combination, out var umaban) || umaban <= 0) continue;
+
+                            _store.UpdateFukushoPayout(
+                                payoutRaceKey.RaceDate, payoutRaceKey.TrackCode, raceInfo.Distance,
+                                umaban, payout.Amount);
+                            fukushoUpdated++;
+                        }
+                    }
 
                     if (totalRecords % BatchSize == 0)
                     {
                         batch.Dispose();
                         batch = _store.BeginBatch();
-                        Console.WriteLine($"[{_source.SourceName}] RACE進捗: {totalRecords}件処理（SE:{seRecords} RA:{raRecords}）");
+                        Console.WriteLine($"[{_source.SourceName}] RACE進捗: {totalRecords}件処理（SE:{seRecords} RA:{raRecords} HR:{hrRecords}）");
                     }
                 }
             }
@@ -142,7 +173,8 @@ namespace KeibaDataCollector.Services
             }
 
             Console.WriteLine(
-                $"[{_source.SourceName}] RACE取り込み完了: 全{totalRecords}件, SE={seRecords}, RA={raRecords}, " +
+                $"[{_source.SourceName}] RACE取り込み完了: 全{totalRecords}件, SE={seRecords}, RA={raRecords}, HR={hrRecords}, " +
+                $"複勝払戻を反映した行={fukushoUpdated}, " +
                 $"RA情報未取得のままのSE={missingRaInfo}（RAより先にSEが来た/開催情報が別範囲だった等の可能性）");
         }
 

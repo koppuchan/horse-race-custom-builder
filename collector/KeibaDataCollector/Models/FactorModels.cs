@@ -26,6 +26,12 @@ namespace KeibaDataCollector.Models
         public double? TanshoOdds { get; set; }
         public double? Agari3F { get; set; }          // 後3ハロンタイム(秒)
         public string CornerPassage4 { get; set; }    // 最終コーナー通過順位（生値。展開分析用）
+
+        /// <summary>複勝払戻金額（100円あたり）。3着以内に入っていなければ0。
+        /// HR（払戻）レコードから別途反映する。単勝回収率はTanshoOdds×(Chakujun==1)で
+        /// 計算できるが、複勝回収率にはこの実払戻額が必要
+        /// （複勝オッズは単勝オッズと別で、SEレコードには載っていない）。</summary>
+        public double? FukushoPayout { get; set; }
     }
 
     /// <summary>坂路調教・ウッドチップ調教の1回分。両者はコース長・ハロン数が異なるため
