@@ -22,6 +22,13 @@ define('HRC_FACTOR_KEYS', array(
  * race_card / race_key など既存メタを読むだけで、新規に書き込むのは hrc_factors と hrc_free_race のみ。
  * 別バッチが race_card を書き換えても衝突しないよう、6ファクターは独立したメタキーに保持する。
  */
+// 優先度20で登録する（既定の10より遅らせる）。'init'に同じ優先度で複数のプラグインが
+// フックしている場合、WordPressはプラグインの読み込み順（基本的にフォルダ名のアルファベット順）で
+// 実行する。"horse-race-custom-builder" は "keiba-race-sync" より辞書順で先に来るため、
+// 既定の優先度のままだと race 投稿タイプが登録される前にここが走ってしまい、
+// post_type_exists('race') が false になって何も登録されない
+// （実機で発生: register_post_metaが効かず、REST APIのmetaにhrc_factorsが一切出ず、
+//  WordPressClientからの書き込みは200 OKを返すのに中身が保存されないという不具合になった）。
 add_action('init', function () {
     if (!post_type_exists('race')) {
         return;
@@ -49,7 +56,7 @@ add_action('init', function () {
             return current_user_can('edit_posts');
         },
     ));
-});
+}, 20);
 
 function hrc_sanitize_json_meta($value)
 {
