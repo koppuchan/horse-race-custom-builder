@@ -147,8 +147,17 @@ namespace KeibaDataCollector
                         break;
                     }
 
+                    case "dbstats":
+                        // backfill済みのSQLiteの中身を件数・日付範囲で確認する。COMもJV-Link/UmaConnも
+                        // 使わないため、setup/backfillと違って一瞬で終わる。
+                        using (var store = new HistoricalDataStore(AppConfig.HistoricalDbPath))
+                        {
+                            store.PrintStats();
+                        }
+                        break;
+
                     default:
-                        Console.WriteLine("使い方: KeibaDataCollector.exe [setup|morning|predict|watch|probe|backfill]");
+                        Console.WriteLine("使い方: KeibaDataCollector.exe [setup|morning|predict|watch|probe|backfill|dbstats]");
                         Console.WriteLine("  setup    : 初回のみ。利用キー等をGUIダイアログで設定する。");
                         Console.WriteLine("  morning  : 朝一バッチ。当日の出走表を取得しWordPressへ反映する。");
                         Console.WriteLine("  predict  : 朝一オッズの人気順から予想印を生成しWordPressへ反映する。");
@@ -157,6 +166,7 @@ namespace KeibaDataCollector
                         Console.WriteLine("            レースを指定する場合: probe 20260811-46-1R");
                         Console.WriteLine("  backfill : 6ファクター用の過去データ一括取得（非常に時間がかかる。先にprobe推奨）。");
                         Console.WriteLine("            ソースを絞る場合: backfill jv （中央競馬のみ） / backfill uma （地方競馬のみ）");
+                        Console.WriteLine("  dbstats  : backfillで蓄積したSQLiteの件数・日付範囲を確認する。");
                         break;
                 }
             }

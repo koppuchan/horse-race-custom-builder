@@ -195,6 +195,48 @@ namespace KeibaDataCollector.Data
             }
         }
 
+        /// <summary>蓄積済みデータの件数・日付範囲をコンソールに出す。
+        /// DBファイルそのものをやり取りする代わりに、統計だけを確認できるようにするための
+        /// 調査用コマンド（Program.csの"dbstats"から呼ぶ）。</summary>
+        public void PrintStats()
+        {
+            Console.WriteLine("=== race_entries（過去のレース結果。枠バイアス・上がり3F等の集計元） ===");
+            using (var cmd = new SQLiteCommand(
+                "SELECT COUNT(*), MIN(race_date), MAX(race_date), COUNT(DISTINCT ketto_num) FROM race_entries;", _conn))
+            using (var r = cmd.ExecuteReader())
+            {
+                if (r.Read())
+                    Console.WriteLine($"件数={r.GetInt64(0)}, 日付範囲=[{ReadOrNull(r, 1)}〜{ReadOrNull(r, 2)}], 対象馬数={r.GetInt64(3)}");
+            }
+            Console.WriteLine("競馬場コード別内訳（上位20）:");
+            using (var cmd = new SQLiteCommand(
+                "SELECT track_code, COUNT(*) c, MIN(race_date), MAX(race_date) FROM race_entries " +
+                "GROUP BY track_code ORDER BY c DESC LIMIT 20;", _conn))
+            using (var r = cmd.ExecuteReader())
+            {
+                while (r.Read())
+                    Console.WriteLine($"  場コード={r.GetString(0)}: {r.GetInt64(1)}件 [{ReadOrNull(r, 2)}〜{ReadOrNull(r, 3)}]");
+            }
+
+            Console.WriteLine("=== training_laps（坂路・ウッドチップ調教） ===");
+            using (var cmd = new SQLiteCommand(
+                "SELECT course, COUNT(*), MIN(chokyo_date), MAX(chokyo_date) FROM training_laps GROUP BY course;", _conn))
+            using (var r = cmd.ExecuteReader())
+            {
+                while (r.Read())
+                    Console.WriteLine($"  {r.GetString(0)}: {r.GetInt64(1)}件 [{ReadOrNull(r, 2)}〜{ReadOrNull(r, 3)}]");
+            }
+
+            Console.WriteLine("=== pedigree_links / broodstock_names（血統） ===");
+            using (var cmd = new SQLiteCommand("SELECT COUNT(*) FROM pedigree_links;", _conn))
+                Console.WriteLine($"  pedigree_links: {cmd.ExecuteScalar()}件");
+            using (var cmd = new SQLiteCommand("SELECT COUNT(*) FROM broodstock_names;", _conn))
+                Console.WriteLine($"  broodstock_names: {cmd.ExecuteScalar()}件");
+            Console.WriteLine("  （血統は生年月日を保存していないため、日付範囲はbackfill実行時のログでのみ確認可）");
+        }
+
+        private static string ReadOrNull(SQLiteDataReader r, int i) => r.IsDBNull(i) ? "N/A" : r.GetString(i);
+
         public void Dispose()
         {
             _conn?.Close();
