@@ -59,6 +59,11 @@ namespace KeibaDataCollector.Models
         public string KettoNum { get; set; }
         public string SireHansyokuNum { get; set; }          // 父
         public string BroodmareSireHansyokuNum { get; set; } // 母父
+
+        /// <summary>対象馬の生年月日。バックフィル時の取得範囲確認用
+        /// （BLDNをNormalオプションで取っても全履歴になっているか不明なため、
+        /// 産駒の生年分布で検算する）。DBには保存せず、ログ集計にのみ使う。</summary>
+        public DateTime BirthDate { get; set; }
     }
 
     /// <summary>繁殖馬マスタ（HN）: 繁殖登録番号→馬名。父・母父の表示名を引くために使う。</summary>

@@ -146,7 +146,10 @@ namespace KeibaDataCollector.Services
 
         private void BackfillTraining(string dataSpec, string expectedTypeId)
         {
-            var open = _source.Open(dataSpec, EarlyAnchorFromTime, DataOption.Setup);
+            // DataOption.Setup(3)は未検証。実機のprobeで DataOption.Normal(1) が
+            // rc=0 で成功することを確認済み（JV-Link/中央競馬でHC:548,966件・WC:162,857件取得）。
+            // Setupではなくこちらを使う。
+            var open = _source.Open(dataSpec, EarlyAnchorFromTime, DataOption.Normal);
             if (open.ReturnCode == -1)
             {
                 _source.Close();
@@ -163,6 +166,7 @@ namespace KeibaDataCollector.Services
             Console.WriteLine($"[{_source.SourceName}] {dataSpec} 全履歴取得を開始します。");
 
             int totalRecords = 0, matched = 0;
+            DateTime? minDate = null, maxDate = null;
             var batch = _store.BeginBatch();
             try
             {
@@ -184,7 +188,11 @@ namespace KeibaDataCollector.Services
                         : JvFactorRecordParser.ParseWoodChipTraining(buffer);
 
                     if (!string.IsNullOrEmpty(entry.KettoNum) && entry.ChokyoDate != DateTime.MinValue)
+                    {
                         _store.UpsertTrainingLap(entry);
+                        if (!minDate.HasValue || entry.ChokyoDate < minDate) minDate = entry.ChokyoDate;
+                        if (!maxDate.HasValue || entry.ChokyoDate > maxDate) maxDate = entry.ChokyoDate;
+                    }
 
                     if (totalRecords % BatchSize == 0)
                     {
@@ -200,13 +208,20 @@ namespace KeibaDataCollector.Services
                 _source.Close();
             }
 
-            Console.WriteLine($"[{_source.SourceName}] {dataSpec}取り込み完了: 全{totalRecords}件中{expectedTypeId}={matched}件");
+            var dateRange = minDate.HasValue ? $" 日付範囲=[{minDate:yyyy-MM-dd}〜{maxDate:yyyy-MM-dd}]" : "";
+            Console.WriteLine($"[{_source.SourceName}] {dataSpec}取り込み完了: 全{totalRecords}件中{expectedTypeId}={matched}件{dateRange}");
         }
 
         /// <summary>血統（BLDN dataspec, "SK"産駒マスタ・"HN"繁殖馬マスタ）を取り込む。</summary>
         public void BackfillPedigree()
         {
-            var open = _source.Open("BLDN", EarlyAnchorFromTime, DataOption.Setup);
+            // BackfillTrainingと同じ理由でNormal(1)を使う。
+            // ただし実機のprobeでは SK:8,302件 と、HC/WCに比べて少なかった。
+            // 全履歴ではなく直近の差分だけの可能性があるため、取り込み後は必ず
+            // 産駒の生年(BirthDate)の分布を確認し、古い年の産駒が少なすぎないか検算すること
+            // （現状のBackfillPedigreeはBirthDateを保存していないため、確認には
+            // PedigreeLinkへのBirthDate追加が別途必要）。
+            var open = _source.Open("BLDN", EarlyAnchorFromTime, DataOption.Normal);
             if (open.ReturnCode == -1)
             {
                 _source.Close();
@@ -223,6 +238,7 @@ namespace KeibaDataCollector.Services
             Console.WriteLine($"[{_source.SourceName}] BLDN 全履歴取得を開始します。");
 
             int totalRecords = 0, skCount = 0, hnCount = 0;
+            int? minBirthYear = null, maxBirthYear = null;
             var batch = _store.BeginBatch();
             try
             {
@@ -243,6 +259,13 @@ namespace KeibaDataCollector.Services
                         var link = JvFactorRecordParser.ParseOffspringPedigree(buffer);
                         if (!string.IsNullOrEmpty(link.KettoNum))
                             _store.UpsertPedigreeLink(link);
+
+                        if (link.BirthDate != DateTime.MinValue)
+                        {
+                            var y = link.BirthDate.Year;
+                            if (!minBirthYear.HasValue || y < minBirthYear) minBirthYear = y;
+                            if (!maxBirthYear.HasValue || y > maxBirthYear) maxBirthYear = y;
+                        }
                     }
                     else if (typeId == "HN")
                     {
@@ -266,7 +289,8 @@ namespace KeibaDataCollector.Services
                 _source.Close();
             }
 
-            Console.WriteLine($"[{_source.SourceName}] BLDN取り込み完了: 全{totalRecords}件, SK={skCount}, HN={hnCount}");
+            var birthYearRange = minBirthYear.HasValue ? $" 産駒の生年範囲=[{minBirthYear}〜{maxBirthYear}]" : "";
+            Console.WriteLine($"[{_source.SourceName}] BLDN取り込み完了: 全{totalRecords}件, SK={skCount}, HN={hnCount}{birthYearRange}");
         }
 
         private static string RaceInfoKey(string year, string monthDay, string jyoCd, string raceNum) =>

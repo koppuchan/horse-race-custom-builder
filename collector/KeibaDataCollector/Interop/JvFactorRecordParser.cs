@@ -84,6 +84,7 @@ namespace KeibaDataCollector.Interop
                 KettoNum = Trim(sk.KettoNum),
                 SireHansyokuNum = sk.HansyokuNum != null && sk.HansyokuNum.Length > 0 ? Trim(sk.HansyokuNum[0]) : string.Empty,
                 BroodmareSireHansyokuNum = sk.HansyokuNum != null && sk.HansyokuNum.Length > 4 ? Trim(sk.HansyokuNum[4]) : string.Empty,
+                BirthDate = ParseYmd(sk.BirthDate),
             };
         }
 

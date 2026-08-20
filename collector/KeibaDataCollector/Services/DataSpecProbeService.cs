@@ -117,6 +117,10 @@ namespace KeibaDataCollector.Services
         private void ReadAndReportTypeBreakdown(string dataSpec, string specName)
         {
             var typeCounts = new Dictionary<string, int>();
+            // HC/WCは日付範囲を見て、実際に何年分取れているか（全履歴なのか直近の差分だけなのか）を
+            // 判断する材料にする。件数だけでは「多いから全履歴」と誤解しかねない
+            // （実機確認: BLDNのSKは8,302件しか無く、全履歴にしては少なすぎた）。
+            DateTime? minDate = null, maxDate = null;
             try
             {
                 while (true)
@@ -133,6 +137,23 @@ namespace KeibaDataCollector.Services
 
                     var typeId = JvRecordParser.GetRecordTypeId(buffer);
                     typeCounts[typeId] = typeCounts.TryGetValue(typeId, out var c) ? c + 1 : 1;
+
+                    DateTime? recordDate = null;
+                    try
+                    {
+                        if (typeId == "HC") recordDate = JvFactorRecordParser.ParseSlopeTraining(buffer).ChokyoDate;
+                        else if (typeId == "WC") recordDate = JvFactorRecordParser.ParseWoodChipTraining(buffer).ChokyoDate;
+                    }
+                    catch
+                    {
+                        // 日付範囲は補助情報なので、1件のパース失敗で調査全体を止めない。
+                    }
+
+                    if (recordDate.HasValue && recordDate.Value != DateTime.MinValue)
+                    {
+                        if (!minDate.HasValue || recordDate < minDate) minDate = recordDate;
+                        if (!maxDate.HasValue || recordDate > maxDate) maxDate = recordDate;
+                    }
                 }
             }
             finally
@@ -143,7 +164,8 @@ namespace KeibaDataCollector.Services
             var breakdown = typeCounts.Count > 0
                 ? string.Join(", ", typeCounts.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key}:{kv.Value}"))
                 : "（レコードなし。この期間・このソースにはデータが無いだけの可能性もあるため即NGとは限らない）";
-            Console.WriteLine($"[{_source.SourceName}] {dataSpec}({specName}): rc=0 レコード種別=[{breakdown}]");
+            var dateRange = minDate.HasValue ? $" 日付範囲=[{minDate:yyyy-MM-dd}〜{maxDate:yyyy-MM-dd}]" : "";
+            Console.WriteLine($"[{_source.SourceName}] {dataSpec}({specName}): rc=0 レコード種別=[{breakdown}]{dateRange}");
         }
 
         private void ProbeRealtimeSpec(RaceKey raceKey, string dataSpec, string specName)
