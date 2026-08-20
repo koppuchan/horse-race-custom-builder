@@ -1,0 +1,155 @@
+.hrc-builder {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.hrc-step {
+    margin-bottom: 24px;
+    padding: 16px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+}
+
+.hrc-step h3 {
+    margin-top: 0;
+}
+
+.hrc-track-group {
+    margin-bottom: 12px;
+}
+
+.hrc-track-name {
+    display: inline-block;
+    min-width: 5em;
+    font-weight: bold;
+    margin-right: 8px;
+}
+
+.hrc-race-btn {
+    display: inline-block;
+    margin: 4px;
+    padding: 8px 14px;
+    border: 1px solid #999;
+    border-radius: 6px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 0.95em;
+}
+
+.hrc-race-btn.is-active {
+    border-color: #2271b1;
+    background: #e8f1fb;
+}
+
+.hrc-race-btn.is-locked .hrc-badge {
+    color: #999;
+}
+
+.hrc-race-btn.is-free .hrc-badge {
+    color: #d63384;
+    font-weight: bold;
+}
+
+.hrc-badge {
+    margin-left: 4px;
+    font-size: 0.85em;
+}
+
+.hrc-factors {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.hrc-factor-btn {
+    padding: 10px 14px;
+    border: 2px solid #ccc;
+    border-radius: 6px;
+    background: #f5f5f5;
+    color: #888;
+    cursor: pointer;
+    font-size: 0.9em;
+}
+
+.hrc-factor-btn.is-on {
+    border-color: #2271b1;
+    background: #2271b1;
+    color: #fff;
+}
+
+.hrc-result-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.hrc-result-table th,
+.hrc-result-table td {
+    border: 1px solid #ddd;
+    padding: 8px;
+    text-align: center;
+}
+
+.hrc-result-table tr:first-child td {
+    background: #fff8e1;
+    font-weight: bold;
+}
+
+.hrc-locked-notice {
+    text-align: center;
+    padding: 24px;
+    border: 2px dashed #06c755;
+    border-radius: 8px;
+}
+
+#hrc-line-unlock-btn {
+    margin-top: 12px;
+    padding: 12px 24px;
+    background: #06c755;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 1.05em;
+    cursor: pointer;
+}
+
+.hrc-add-friend-banner {
+    position: relative;
+    text-align: center;
+    padding: 20px 40px;
+    margin-bottom: 24px;
+    background: #e9fbf1;
+    border: 2px solid #06c755;
+    border-radius: 8px;
+}
+
+.hrc-add-friend-banner p {
+    margin: 0 0 10px;
+    font-weight: bold;
+}
+
+.hrc-add-friend-banner a {
+    display: inline-block;
+    padding: 10px 20px;
+    background: #06c755;
+    color: #fff;
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 1.05em;
+}
+
+#hrc-add-friend-dismiss {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    background: none;
+    border: none;
+    font-size: 1.2em;
+    cursor: pointer;
+    color: #666;
+}
+
+@media (max-width: 600px) {
+    .hrc-factors {
+        flex-direction: column;
+    }
+}
