@@ -47,13 +47,20 @@ namespace KeibaDataCollector.Services
         /// </param>
         public void Run(DateTime targetDate, string raceKeySlug = null)
         {
+            // SetupSpecsToProbe（SLOP/WOOD/BLDN）は特定レースに紐付かないため、
+            // 「本日のレースが見つかるか」に関係なく必ず実行する。
+            // 以前はこのチェックより後段にあったため、中央競馬の非開催日に丸ごとスキップされていた
+            // （UmaConn側の地方競馬は開催があっても、JV-Link側はそのまま何も調べずに終わっていた）。
+            foreach (var (spec, name) in SetupSpecsToProbe)
+                ProbeSetupSpec(spec, name);
+
             var raceKey = string.IsNullOrWhiteSpace(raceKeySlug)
                 ? FindFirstRaceOfDay(targetDate)
                 : ParseSlug(raceKeySlug);
 
             if (raceKey == null)
             {
-                Console.WriteLine($"[{_source.SourceName}] {targetDate:yyyy-MM-dd} の対象レースが見つかりませんでした。");
+                Console.WriteLine($"[{_source.SourceName}] {targetDate:yyyy-MM-dd} の対象レースが見つからず、速報系データ種別の調査はスキップしました。");
                 return;
             }
 
@@ -61,9 +68,6 @@ namespace KeibaDataCollector.Services
 
             foreach (var (spec, name) in RealtimeSpecsToProbe)
                 ProbeRealtimeSpec(raceKey, spec, name);
-
-            foreach (var (spec, name) in SetupSpecsToProbe)
-                ProbeSetupSpec(spec, name);
         }
 
         // 6ファクター用に追加。全履歴セットアップ(DataOption.Setup)は重いため、
