@@ -1,0 +1,12 @@
+bin/
+obj/
+*.user
+.vs/
+secrets.local.bat
+.env
+
+# 履歴バックフィルで生成される大容量DB。git管理対象外（VPSローカルに置いたままにする）。
+collector/KeibaDataCollector/data/
+*.sqlite3
+
+logs/
