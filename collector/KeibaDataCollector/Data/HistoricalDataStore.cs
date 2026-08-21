@@ -42,6 +42,7 @@ namespace KeibaDataCollector.Data
 
             EnsureSchema();
             MigrateAddFukushoPayoutColumn();
+            MigrateAddRaceNumberColumn();
         }
 
         /// <summary>既に稼働中のDB（このカラムが無い状態でbackfill済みのもの）向けの移行措置。
@@ -59,6 +60,25 @@ namespace KeibaDataCollector.Data
             }
         }
 
+        /// <summary>race_number列の追加移行。旧DBでは(race_date, track_code, distance, umaban)だけで
+        /// 複勝払戻をUPDATEしていたが、同じ競馬場・同日開催の複数レースが同じ距離になることは
+        /// 地方競馬では珍しくなく、それだと関係ない別レースの馬にまで払戻額を誤って反映しうる
+        /// （実機で全馬のjockeyRoiが一律50点になる不具合として発覚）。race_numberを追加してUPDATE時の
+        /// 突き合わせをレース単位まで絞り込めるようにする。旧DBの既存行はrace_number=NULLのままなので、
+        /// 過去分の複勝払戻を正しく取り直すには再度run-backfill.batが必要。</summary>
+        private void MigrateAddRaceNumberColumn()
+        {
+            try
+            {
+                Exec("ALTER TABLE race_entries ADD COLUMN race_number INTEGER;");
+                Console.WriteLine("[HistoricalDataStore] race_entries に race_number 列を追加しました（再backfillで実値が入ります）。");
+            }
+            catch (SQLiteException ex) when (ex.Message.IndexOf("duplicate column", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                // 既に列がある。想定内。
+            }
+        }
+
         private void EnsureSchema()
         {
             Exec(@"
@@ -66,6 +86,7 @@ namespace KeibaDataCollector.Data
                     ketto_num TEXT NOT NULL,
                     race_date TEXT NOT NULL,
                     track_code TEXT NOT NULL,
+                    race_number INTEGER,
                     track_surface_code TEXT,
                     distance INTEGER,
                     waku INTEGER,
@@ -82,7 +103,7 @@ namespace KeibaDataCollector.Data
                 CREATE INDEX IF NOT EXISTS idx_race_entries_track ON race_entries(track_code, distance, track_surface_code);
                 CREATE INDEX IF NOT EXISTS idx_race_entries_jockey ON race_entries(jockey_code, track_code, distance);
                 CREATE INDEX IF NOT EXISTS idx_race_entries_ketto ON race_entries(ketto_num);
-                CREATE INDEX IF NOT EXISTS idx_race_entries_umaban_lookup ON race_entries(race_date, track_code, distance, umaban);
+                CREATE INDEX IF NOT EXISTS idx_race_entries_umaban_lookup ON race_entries(race_date, track_code, race_number, umaban);
 
                 CREATE TABLE IF NOT EXISTS training_laps (
                     ketto_num TEXT NOT NULL,
@@ -117,12 +138,13 @@ namespace KeibaDataCollector.Data
             // 既に反映済みの払戻額をnullで上書きしてしまう。
             Exec(@"
                 INSERT INTO race_entries
-                    (ketto_num, race_date, track_code, track_surface_code, distance, waku, umaban,
+                    (ketto_num, race_date, track_code, race_number, track_surface_code, distance, waku, umaban,
                      jockey_code, trainer_code, chakujun, tansho_odds, agari_3f, corner_passage_4, fukusho_payout)
                 VALUES
-                    (@ketto_num, @race_date, @track_code, @track_surface_code, @distance, @waku, @umaban,
+                    (@ketto_num, @race_date, @track_code, @race_number, @track_surface_code, @distance, @waku, @umaban,
                      @jockey_code, @trainer_code, @chakujun, @tansho_odds, @agari_3f, @corner_passage_4, @fukusho_payout)
                 ON CONFLICT(ketto_num, race_date, track_code, distance) DO UPDATE SET
+                    race_number=excluded.race_number,
                     track_surface_code=excluded.track_surface_code,
                     waku=excluded.waku,
                     umaban=excluded.umaban,
@@ -137,6 +159,7 @@ namespace KeibaDataCollector.Data
                     p.AddWithValue("@ketto_num", e.KettoNum);
                     p.AddWithValue("@race_date", e.RaceDate.ToString("yyyy-MM-dd"));
                     p.AddWithValue("@track_code", e.TrackCode);
+                    p.AddWithValue("@race_number", e.RaceNumber);
                     p.AddWithValue("@track_surface_code", (object)e.TrackSurfaceCode ?? DBNull.Value);
                     p.AddWithValue("@distance", e.Distance);
                     p.AddWithValue("@waku", e.Waku);
@@ -152,20 +175,24 @@ namespace KeibaDataCollector.Data
         }
 
         /// <summary>HR（払戻）レコード側から、既に挿入済みのSE由来の行へ複勝払戻額を反映する。
-        /// ketto_numはHR側に無いため、umaban込みの複合キーで一致させる（1レース内でumabanは一意）。
+        /// ketto_numはHR側に無いため、umaban込みの複合キーで一致させる。race_numberも条件に含める。
+        /// distanceだけだと、同日・同競馬場内で距離が同じ別レース（地方競馬では珍しくない）の
+        /// 同じ馬番にまで払戻額が誤って反映されてしまうため
+        /// （実機で発覚：全馬のjockeyRoiが一律50点になっていた）。
         /// 対象行が無くても（RAより前にHRが来る、等の想定外順序）例外にはしない
         /// （ExecuteNonQueryは0件更新でも成功扱い）。</summary>
-        public void UpdateFukushoPayout(DateTime raceDate, string trackCode, int distance, int umaban, double payoutAmount)
+        public void UpdateFukushoPayout(DateTime raceDate, string trackCode, int raceNumber, int distance, int umaban, double payoutAmount)
         {
             Exec(@"
                 UPDATE race_entries SET fukusho_payout = @payout
                 WHERE race_date = @race_date AND track_code = @track_code
-                  AND distance = @distance AND umaban = @umaban;
+                  AND race_number = @race_number AND distance = @distance AND umaban = @umaban;
             ",
                 p => {
                     p.AddWithValue("@payout", payoutAmount);
                     p.AddWithValue("@race_date", raceDate.ToString("yyyy-MM-dd"));
                     p.AddWithValue("@track_code", trackCode);
+                    p.AddWithValue("@race_number", raceNumber);
                     p.AddWithValue("@distance", distance);
                     p.AddWithValue("@umaban", umaban);
                 });

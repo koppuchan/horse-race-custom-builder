@@ -16,6 +16,7 @@ namespace KeibaDataCollector.Models
         public string KettoNum { get; set; }        // 血統登録番号（馬の一意キー）
         public DateTime RaceDate { get; set; }
         public string TrackCode { get; set; }        // 競馬場コード（JyoCD）
+        public int RaceNumber { get; set; }           // レース番号（同日・同場・同距離の複数レースを区別するため必須）
         public string TrackSurfaceCode { get; set; }  // トラックコード（芝/ダート等）
         public int Distance { get; set; }             // 距離(m)
         public int Waku { get; set; }

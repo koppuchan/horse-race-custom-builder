@@ -114,6 +114,7 @@ namespace KeibaDataCollector.Services
                             KettoNum = Trim(se.KettoNum),
                             RaceDate = ParseRaceDate(se.id.Year, se.id.MonthDay),
                             TrackCode = Trim(se.id.JyoCD),
+                            RaceNumber = SafeInt(se.id.RaceNum),
                             TrackSurfaceCode = raceInfo.TrackSurfaceCode,
                             Distance = raceInfo.Distance,
                             Waku = SafeInt(se.Wakuban),
@@ -152,8 +153,8 @@ namespace KeibaDataCollector.Services
                             if (!int.TryParse(payout.Combination, out var umaban) || umaban <= 0) continue;
 
                             _store.UpdateFukushoPayout(
-                                payoutRaceKey.RaceDate, payoutRaceKey.TrackCode, raceInfo.Distance,
-                                umaban, payout.Amount);
+                                payoutRaceKey.RaceDate, payoutRaceKey.TrackCode, payoutRaceKey.RaceNumber,
+                                raceInfo.Distance, umaban, payout.Amount);
                             fukushoUpdated++;
                         }
                     }
