@@ -17,10 +17,6 @@ namespace KeibaDataCollector.Services
     /// サンプル数が少なすぎる集団（HAVING句のMinSample未満）は信頼できないため、
     /// 数値を無理に出さずnullを返す。0点や50点で埋めると「本当に平均的」と「データが無い」が
     /// 区別できなくなり、後で見返したときに誤解を招くため。
-    ///
-    /// ②テン速度・展開（前半3Fタイム基準）は、必要なラップデータ（RAレコードのLapTime配列）を
-    /// まだ収集していないため、このバージョンでは実装できていない。常にnullを返す
-    /// （フロント側は数値でないファクターを計算から除外する作りなので、安全側に倒れる）。
     /// </summary>
     public class FactorScoringService
     {
@@ -33,6 +29,9 @@ namespace KeibaDataCollector.Services
         // 個体の直近成績として見る件数（近走）。
         private const int RecentRunsWindow = 5;
 
+        // ②テン速度・展開用。クライアント基準の「近3走」に合わせる（③の直近5走とは別窓）。
+        private const int RecentPaceRunsWindow = 3;
+
         public FactorScoringService(HistoricalDataStore store)
         {
             _conn = store.Connection;
@@ -43,7 +42,7 @@ namespace KeibaDataCollector.Services
             return new FactorScores
             {
                 ParamBias = ComputeWakuBias(input.TrackCode, input.Distance, input.TrackSurfaceCode, input.Waku),
-                ParamPace = null, // 未実装。README/コード先頭コメント参照。
+                ParamPace = ComputePaceScore(input.KettoNum, input.TrackCode, input.Distance, input.TrackSurfaceCode),
                 ParamAgariQ = ComputeAgariQuality(input.KettoNum, input.TrackSurfaceCode),
                 ParamJockeyRoi = ComputeJockeyRoi(input.TrackCode, input.Distance, input.JockeyCode),
                 ParamPedigreeFit = ComputePedigreeFit(input.KettoNum, input.TrackCode, input.Distance),
@@ -78,6 +77,79 @@ namespace KeibaDataCollector.Services
 
             if (!rates.TryGetValue(waku, out var thisRate) || rates.Count < 2) return null;
             return ToDeviationScore(thisRate, rates.Values, invert: false);
+        }
+
+        /// <summary>②テン速度・展開: クライアント基準「近3走の前半3Fタイム・脚質実績からの
+        /// 先行有利度」に対応。個体ごとの前半3Fタイムはrace_entriesに持っていないため、
+        /// 代わりに「最も早いコーナーでの通過順位」（0=先頭通過, 1=最後尾通過に正規化した
+        /// early_position_ratio。BackfillService参照）を脚質実績の代理指標として使う。
+        ///
+        /// 1. 対象馬の直近3走のearly_position_ratio平均＝horseStyle（小さいほど先行タイプ）。
+        /// 2. 当該コース(track×distance×surface)で、複勝圏内(1〜3着)に入った馬の方が
+        ///    それ以外の馬よりも平均して前目を通過しているかを比較する。前目の方が良ければ
+        ///    「このコースは先行有利」と判定する。
+        /// 3. horseStyleを、当該コースのearly_position_ratio分布内で偏差値化する。
+        ///    先行有利なコースでは値が小さい（前目）ほど高得点になるよう反転する。</summary>
+        private double? ComputePaceScore(string kettoNum, string trackCode, int distance, string surfaceCode)
+        {
+            double? horseStyle = null;
+            using (var cmd = new SQLiteCommand(@"
+                SELECT AVG(early_position_ratio) FROM (
+                    SELECT early_position_ratio FROM race_entries
+                    WHERE ketto_num=@ketto AND early_position_ratio IS NOT NULL
+                    ORDER BY race_date DESC LIMIT @n
+                );", _conn))
+            {
+                cmd.Parameters.AddWithValue("@ketto", kettoNum);
+                cmd.Parameters.AddWithValue("@n", RecentPaceRunsWindow);
+                var result = cmd.ExecuteScalar();
+                if (result != null && result != DBNull.Value) horseStyle = Convert.ToDouble(result);
+            }
+            if (!horseStyle.HasValue) return null;
+
+            double? placedAvg = null, restAvg = null;
+            int placedCount = 0, restCount = 0;
+            using (var cmd = new SQLiteCommand(@"
+                SELECT
+                    AVG(CASE WHEN chakujun BETWEEN 1 AND 3 THEN early_position_ratio END) placed_avg,
+                    SUM(CASE WHEN chakujun BETWEEN 1 AND 3 THEN 1 ELSE 0 END) placed_count,
+                    AVG(CASE WHEN chakujun > 3 THEN early_position_ratio END) rest_avg,
+                    SUM(CASE WHEN chakujun > 3 THEN 1 ELSE 0 END) rest_count
+                FROM race_entries
+                WHERE track_code=@track AND distance=@distance AND track_surface_code=@surface
+                      AND chakujun > 0 AND early_position_ratio IS NOT NULL;", _conn))
+            {
+                cmd.Parameters.AddWithValue("@track", trackCode);
+                cmd.Parameters.AddWithValue("@distance", distance);
+                cmd.Parameters.AddWithValue("@surface", surfaceCode);
+                using (var r = cmd.ExecuteReader())
+                {
+                    if (r.Read())
+                    {
+                        if (!r.IsDBNull(0)) placedAvg = r.GetDouble(0);
+                        placedCount = r.GetInt32(1);
+                        if (!r.IsDBNull(2)) restAvg = r.GetDouble(2);
+                        restCount = r.GetInt32(3);
+                    }
+                }
+            }
+            if (placedCount < MinGroupSample || restCount < MinGroupSample || !placedAvg.HasValue || !restAvg.HasValue)
+                return null;
+
+            // 複勝圏内の馬の方が前目(値が小さい)を通過していれば、このコースは先行有利。
+            var trackFavorsFront = placedAvg.Value < restAvg.Value;
+
+            var (mean, stddev, popCount) = GetPopulationMeanStdDev(
+                "SELECT early_position_ratio FROM race_entries WHERE track_code=@track AND distance=@distance " +
+                "AND track_surface_code=@surface AND early_position_ratio IS NOT NULL",
+                p => {
+                    p.AddWithValue("@track", trackCode);
+                    p.AddWithValue("@distance", distance);
+                    p.AddWithValue("@surface", surfaceCode);
+                });
+            if (popCount < MinGroupSample || stddev <= 0) return null;
+
+            return ToDeviationScore(horseStyle.Value, mean, stddev, invert: trackFavorsFront);
         }
 
         /// <summary>③上がり3F質・末脚: 直近走の上がり3Fタイム平均を、同じ馬場種別（芝/ダート）

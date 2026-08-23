@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Text.RegularExpressions;
 using KeibaDataCollector.Models;
 using static KeibaDataCollector.Interop.JvDataSdk.JVData_Struct;
 
@@ -69,11 +70,10 @@ namespace KeibaDataCollector.Interop
 
         /// <summary>"SK"レコード（産駒マスタ）から父・母父の繁殖登録番号を取り出す。
         ///
-        /// HansyokuNum[14]の並び順（0:父 1:母 2:父父 3:父母 4:母父 5:母母...）は
-        /// JRA-VAN公式の一次仕様書内では記載箇所を特定できなかった（複数の公開ツール解説では
-        /// 一致）。血統適性ロジックを実装する前に、既知の馬（例:近年の有名馬）のKettoNumで
-        /// このパーサーの出力を実際の父・母父と突き合わせて必ず検算すること。
-        /// ここが違うと「父」と「母父」を取り違えたまま集計してしまう。</summary>
+        /// HansyokuNum[14]の並び順（0:父 1:母 2:父父 3:父母 4:母父 5:母母...）は、
+        /// JV-Data仕様書Ver.4.9.0.1「フォーマット」シート（19.産駒マスタ・項番13）に
+        /// 「父･母･父父･父母･母父･母母･父父父･父父母･父母父･父母母･母父父･母父母･母母父･母母母の
+        /// 順に設定」と明記されており、公式仕様書で確認済み。</summary>
         public static PedigreeLink ParseOffspringPedigree(string rawRecord)
         {
             var sk = new JV_SK_SANKU();
@@ -99,6 +99,44 @@ namespace KeibaDataCollector.Interop
                 HansyokuNum = Trim(hn.HansyokuNum),
                 Bamei = Trim(hn.Bamei),
             };
+        }
+
+        /// <summary>RAレコードのCornerInfo配列から、最も早い（コーナー番号が最小の）
+        /// 通過順位テキストを選び、先頭から並んだ馬番の配列に変換する。②テン速度・展開
+        /// （脚質実績）で「その馬がどれだけ前目で競馬をする馬か」を求めるための入力。
+        ///
+        /// JV-Data仕様書Ver.4.9.0.1「フォーマット」シート（3.レース詳細、コーナー通過順位の
+        /// 説明）に記法が明記されている: 例 "(4,5,6,*7)=1-2,3,8,9(10,11)   12,13"。
+        /// ():集団　=:大差　-:小差　*:先頭集団内の先頭馬　,:馬番の区切り。
+        /// ここでは前後関係（左から右へ＝先頭から最後尾）だけを使い、集団内の微妙な差
+        /// （=と-の違いや*の位置）までは区別しない単純化をしている
+        /// （先行有利度という大づかみな指標には十分な精度と判断）。
+        /// 該当コーナーの記録が無ければ空配列を返す。</summary>
+        public static int[] ParseEarliestCornerOrder(JV_RA_RACE ra)
+        {
+            string earliestJyuni = null;
+            var earliestCornerNum = int.MaxValue;
+            if (ra.CornerInfo != null)
+            {
+                foreach (var corner in ra.CornerInfo)
+                {
+                    var jyuni = Trim(corner.Jyuni);
+                    if (jyuni.Length == 0) continue;
+                    var cornerNum = SafeInt(corner.Corner);
+                    if (cornerNum > 0 && cornerNum < earliestCornerNum)
+                    {
+                        earliestCornerNum = cornerNum;
+                        earliestJyuni = jyuni;
+                    }
+                }
+            }
+            if (earliestJyuni == null) return Array.Empty<int>();
+
+            var matches = Regex.Matches(earliestJyuni, @"\d+");
+            var result = new int[matches.Count];
+            for (int i = 0; i < matches.Count; i++)
+                result[i] = int.Parse(matches[i].Value);
+            return result;
         }
 
         /// <summary>4桁のラップタイム文字列（例:"125"=12.5秒、末尾1桁が小数第1位）を秒数に変換する。

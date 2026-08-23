@@ -69,8 +69,9 @@ namespace KeibaDataCollector.Services
 
             Console.WriteLine($"[{_source.SourceName}] RACE 全履歴取得を開始します（ダウンロード対象 {open.DownloadCount}ファイル）。");
 
-            // レースキー(日付+場コード+R番号)ごとの距離・トラック種別。RA到着時に埋め、SE処理時に参照する。
-            var raceInfoByKey = new Dictionary<string, (int Distance, string TrackSurfaceCode)>();
+            // レースキー(日付+場コード+R番号)ごとの距離・トラック種別・最も早いコーナーの通過順位
+            // （先頭からの馬番配列。②テン速度・展開用）。RA到着時に埋め、SE処理時に参照する。
+            var raceInfoByKey = new Dictionary<string, (int Distance, string TrackSurfaceCode, int[] EarliestCornerOrder)>();
 
             // HR（払戻）はここに溜めるだけにして、ストリーム読み込みが全部終わった後にまとめて
             // race_entriesへ反映する。理由: 実機診断で「HRはRA→SE→HRの順で来る」という前提が
@@ -104,7 +105,7 @@ namespace KeibaDataCollector.Services
                         var ra = new JV_RA_RACE();
                         ra.SetDataB(ref buffer);
                         var key = RaceInfoKey(ra.id.Year, ra.id.MonthDay, ra.id.JyoCD, ra.id.RaceNum);
-                        raceInfoByKey[key] = (SafeInt(ra.Kyori), Trim(ra.TrackCD));
+                        raceInfoByKey[key] = (SafeInt(ra.Kyori), Trim(ra.TrackCD), JvFactorRecordParser.ParseEarliestCornerOrder(ra));
                     }
                     else if (typeId == "SE")
                     {
@@ -116,9 +117,10 @@ namespace KeibaDataCollector.Services
                         if (!raceInfoByKey.TryGetValue(key, out var raceInfo))
                         {
                             missingRaInfo++;
-                            raceInfo = (0, string.Empty);
+                            raceInfo = (0, string.Empty, Array.Empty<int>());
                         }
 
+                        var umaban = SafeInt(se.Umaban);
                         var entry = new HistoricalRaceEntry
                         {
                             KettoNum = Trim(se.KettoNum),
@@ -128,13 +130,14 @@ namespace KeibaDataCollector.Services
                             TrackSurfaceCode = raceInfo.TrackSurfaceCode,
                             Distance = raceInfo.Distance,
                             Waku = SafeInt(se.Wakuban),
-                            Umaban = SafeInt(se.Umaban),
+                            Umaban = umaban,
                             JockeyCode = Trim(se.KisyuCode),
                             TrainerCode = Trim(se.ChokyosiCode),
                             Chakujun = SafeInt(se.KakuteiJyuni),
                             TanshoOdds = SafeOddsTenths(se.Odds),
                             Agari3F = SafeOddsTenths(se.HaronTimeL3),
                             CornerPassage4 = null, // コーナー通過はRA側の配列。必要になれば別テーブルに分離する。
+                            EarlyPositionRatio = ComputeEarlyPositionRatio(raceInfo.EarliestCornerOrder, umaban),
                         };
 
                         if (!string.IsNullOrEmpty(entry.KettoNum) && entry.RaceDate != DateTime.MinValue)
@@ -396,6 +399,17 @@ namespace KeibaDataCollector.Services
 
         private static string RaceInfoKey(string year, string monthDay, string jyoCd, string raceNum) =>
             $"{Trim(year)}-{Trim(monthDay)}-{Trim(jyoCd)}-{Trim(raceNum)}";
+
+        /// <summary>最も早いコーナーの通過順位配列における、この馬番の順位を0〜1に正規化する
+        /// （0=先頭で通過、1=最後尾で通過）。配列に馬番が無い、または頭数が1頭以下なら
+        /// null（②テン速度・展開はこの馬について算出不能として扱う）。</summary>
+        private static double? ComputeEarlyPositionRatio(int[] earliestCornerOrder, int umaban)
+        {
+            if (earliestCornerOrder == null || earliestCornerOrder.Length <= 1 || umaban <= 0) return null;
+            var index = Array.IndexOf(earliestCornerOrder, umaban);
+            if (index < 0) return null;
+            return (double)index / (earliestCornerOrder.Length - 1);
+        }
 
         private static DateTime ParseRaceDate(string year, string monthDay)
         {

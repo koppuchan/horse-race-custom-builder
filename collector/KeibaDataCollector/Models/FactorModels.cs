@@ -28,6 +28,11 @@ namespace KeibaDataCollector.Models
         public double? Agari3F { get; set; }          // 後3ハロンタイム(秒)
         public string CornerPassage4 { get; set; }    // 最終コーナー通過順位（生値。展開分析用）
 
+        /// <summary>その馬の「最も早いコーナー」通過順位を、(出走頭数-1)で正規化した0〜1の値。
+        /// 0=最初のコーナーを先頭で通過、1=最後尾で通過。②テン速度・展開（脚質実績）の元データ。
+        /// RAレコードのコーナー通過順位（Jyuni）テキストから算出する（BackfillService参照）。</summary>
+        public double? EarlyPositionRatio { get; set; }
+
         /// <summary>複勝払戻金額（100円あたり）。3着以内に入っていなければ0。
         /// HR（払戻）レコードから別途反映する。単勝回収率はTanshoOdds×(Chakujun==1)で
         /// 計算できるが、複勝回収率にはこの実払戻額が必要
@@ -57,10 +62,9 @@ namespace KeibaDataCollector.Models
     }
 
     /// <summary>血統：ある馬の父・母父（HansyokuNum＝繁殖登録番号）。
-    /// JV-Data「17.産駒マスタ」のHansyokuNum[14]は3代血統を固定順で持つ
-    /// （0:父 1:母 2:父父 3:父母 4:母父 5:母母 ...）。この並びはJRA-VANの
-    /// 複数の公開ツール解説で一致しているが、一次仕様書そのものでは未確認のため、
-    /// 実データ投入後に既知の馬で必ず検算すること（README参照）。</summary>
+    /// JV-Data「19.産駒マスタ」のHansyokuNum[14]は3代血統を固定順で持つ
+    /// （0:父 1:母 2:父父 3:父母 4:母父 5:母母 ...）。JV-Data仕様書Ver.4.9.0.1
+    /// （フォーマットシート、項番13）で公式に確認済み。</summary>
     public class PedigreeLink
     {
         public string KettoNum { get; set; }
