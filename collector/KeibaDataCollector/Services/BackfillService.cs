@@ -77,6 +77,7 @@ namespace KeibaDataCollector.Services
             // どの段階で0になっているかを見るため、HR処理のステップごとに数える。
             int hrRaceInfoMissing = 0, hrAnyPayoutEntries = 0, hrFukushoSeen = 0, hrFukushoUnparseable = 0;
             int hrFukushoSampleLogged = 0;
+            int raKeySampleLogged = 0, hrMissingKeySampleLogged = 0;
             var batch = _store.BeginBatch();
             try
             {
@@ -99,6 +100,14 @@ namespace KeibaDataCollector.Services
                         ra.SetDataB(ref buffer);
                         var key = RaceInfoKey(ra.id.Year, ra.id.MonthDay, ra.id.JyoCD, ra.id.RaceNum);
                         raceInfoByKey[key] = (SafeInt(ra.Kyori), Trim(ra.TrackCD));
+
+                        if (raKeySampleLogged < 5)
+                        {
+                            raKeySampleLogged++;
+                            Console.WriteLine(
+                                $"[{_source.SourceName}] RAキー登録サンプル: key=[{key}] " +
+                                $"raw(Year=[{ra.id.Year}] MonthDay=[{ra.id.MonthDay}] JyoCD=[{ra.id.JyoCD}] RaceNum=[{ra.id.RaceNum}])");
+                        }
                     }
                     else if (typeId == "SE")
                     {
@@ -146,6 +155,14 @@ namespace KeibaDataCollector.Services
                         if (!raceInfoByKey.TryGetValue(key, out var raceInfo))
                         {
                             hrRaceInfoMissing++;
+                            if (hrMissingKeySampleLogged < 5)
+                            {
+                                hrMissingKeySampleLogged++;
+                                Console.WriteLine(
+                                    $"[{_source.SourceName}] HR未一致キーサンプル: key=[{key}] " +
+                                    $"raw(Year=[{hr.id.Year}] MonthDay=[{hr.id.MonthDay}] JyoCD=[{hr.id.JyoCD}] RaceNum=[{hr.id.RaceNum}]) " +
+                                    $"raceInfoByKey登録件数={raceInfoByKey.Count}");
+                            }
                             continue; // 距離が分からない行は更新しようがないためスキップ。
                         }
 
