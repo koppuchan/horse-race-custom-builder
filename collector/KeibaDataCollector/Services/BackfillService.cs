@@ -69,15 +69,20 @@ namespace KeibaDataCollector.Services
 
             Console.WriteLine($"[{_source.SourceName}] RACE 全履歴取得を開始します（ダウンロード対象 {open.DownloadCount}ファイル）。");
 
-            // レースキー(日付+場コード+R番号)ごとの距離・トラック種別。RA到着時に埋め、SE/HR処理時に参照する。
+            // レースキー(日付+場コード+R番号)ごとの距離・トラック種別。RA到着時に埋め、SE処理時に参照する。
             var raceInfoByKey = new Dictionary<string, (int Distance, string TrackSurfaceCode)>();
 
-            int totalRecords = 0, seRecords = 0, raRecords = 0, hrRecords = 0, fukushoUpdated = 0, missingRaInfo = 0;
-            // 「複勝払戻を反映した行=0」の原因切り分け用の診断カウンタ。
-            // どの段階で0になっているかを見るため、HR処理のステップごとに数える。
-            int hrRaceInfoMissing = 0, hrAnyPayoutEntries = 0, hrFukushoSeen = 0, hrFukushoUnparseable = 0;
-            int hrFukushoSampleLogged = 0;
-            int raKeySampleLogged = 0, hrMissingKeySampleLogged = 0;
+            // HR（払戻）はここに溜めるだけにして、ストリーム読み込みが全部終わった後にまとめて
+            // race_entriesへ反映する。理由: 実機診断で「HRはRA→SE→HRの順で来る」という前提が
+            // 誤りだと判明した（同日内でHRがRA/SEより先に届くケースがあり、その場で
+            // UPDATEしようとしても対象のrace_entries行がまだ存在せず0件更新のまま終わっていた。
+            // 実際、最初の5000件処理時点でSE:0 RA:0 HR:264というログが出ていた）。
+            // ストリーム全体を読み終えた後ならrace_entriesは確実に埋まっているため、
+            // 順序に依存せずに反映できる。
+            var pendingFukusho = new List<(DateTime RaceDate, string TrackCode, int RaceNumber, int Umaban, double Amount)>();
+
+            int totalRecords = 0, seRecords = 0, raRecords = 0, hrRecords = 0, missingRaInfo = 0;
+            int hrAnyPayoutEntries = 0, hrFukushoSeen = 0, hrFukushoUnparseable = 0, hrFukushoSampleLogged = 0;
             var batch = _store.BeginBatch();
             try
             {
@@ -100,14 +105,6 @@ namespace KeibaDataCollector.Services
                         ra.SetDataB(ref buffer);
                         var key = RaceInfoKey(ra.id.Year, ra.id.MonthDay, ra.id.JyoCD, ra.id.RaceNum);
                         raceInfoByKey[key] = (SafeInt(ra.Kyori), Trim(ra.TrackCD));
-
-                        if (raKeySampleLogged < 5)
-                        {
-                            raKeySampleLogged++;
-                            Console.WriteLine(
-                                $"[{_source.SourceName}] RAキー登録サンプル: key=[{key}] " +
-                                $"raw(Year=[{ra.id.Year}] MonthDay=[{ra.id.MonthDay}] JyoCD=[{ra.id.JyoCD}] RaceNum=[{ra.id.RaceNum}])");
-                        }
                     }
                     else if (typeId == "SE")
                     {
@@ -149,25 +146,9 @@ namespace KeibaDataCollector.Services
                         var hr = new JV_HR_PAY();
                         hr.SetDataB(ref buffer);
 
-                        // 距離はRACE_IDだけでは分からないため、RA到着時に埋めたraceInfoByKeyを
-                        // SE同様に参照する（HRはRA→SE→HRの順で最後に来る想定なので、通常は既にある）。
-                        var key = RaceInfoKey(hr.id.Year, hr.id.MonthDay, hr.id.JyoCD, hr.id.RaceNum);
-                        if (!raceInfoByKey.TryGetValue(key, out var raceInfo))
-                        {
-                            hrRaceInfoMissing++;
-                            if (hrMissingKeySampleLogged < 5)
-                            {
-                                hrMissingKeySampleLogged++;
-                                Console.WriteLine(
-                                    $"[{_source.SourceName}] HR未一致キーサンプル: key=[{key}] " +
-                                    $"raw(Year=[{hr.id.Year}] MonthDay=[{hr.id.MonthDay}] JyoCD=[{hr.id.JyoCD}] RaceNum=[{hr.id.RaceNum}]) " +
-                                    $"raceInfoByKey登録件数={raceInfoByKey.Count}");
-                            }
-                            continue; // 距離が分からない行は更新しようがないためスキップ。
-                        }
-
                         // 複勝払戻だけを反映する（単勝回収率はrace_entriesのtansho_odds×着順1から
                         // 計算できるため、複勝以外の券種は6ファクターの集計には不要）。
+                        // ここではDBに書かず、pendingFukushoに積むだけ（上のコメント参照）。
                         var (payoutRaceKey, payouts) = JvRecordParser.ParsePayouts(buffer);
                         hrAnyPayoutEntries += payouts.Count;
                         foreach (var payout in payouts)
@@ -179,8 +160,8 @@ namespace KeibaDataCollector.Services
                             {
                                 hrFukushoSampleLogged++;
                                 Console.WriteLine(
-                                    $"[{_source.SourceName}] 複勝払戻サンプル: race={key} Combination=\"{payout.Combination}\" " +
-                                    $"Amount={payout.Amount} Ninki={payout.Ninki}");
+                                    $"[{_source.SourceName}] 複勝払戻サンプル: race={payoutRaceKey.AsSlug()} " +
+                                    $"Combination=\"{payout.Combination}\" Amount={payout.Amount} Ninki={payout.Ninki}");
                             }
 
                             if (!int.TryParse(payout.Combination, out var umaban) || umaban <= 0)
@@ -189,10 +170,8 @@ namespace KeibaDataCollector.Services
                                 continue;
                             }
 
-                            _store.UpdateFukushoPayout(
-                                payoutRaceKey.RaceDate, payoutRaceKey.TrackCode, payoutRaceKey.RaceNumber,
-                                raceInfo.Distance, umaban, payout.Amount);
-                            fukushoUpdated++;
+                            pendingFukusho.Add((payoutRaceKey.RaceDate, payoutRaceKey.TrackCode,
+                                payoutRaceKey.RaceNumber, umaban, payout.Amount));
                         }
                     }
 
@@ -212,12 +191,39 @@ namespace KeibaDataCollector.Services
 
             Console.WriteLine(
                 $"[{_source.SourceName}] RACE取り込み完了: 全{totalRecords}件, SE={seRecords}, RA={raRecords}, HR={hrRecords}, " +
-                $"複勝払戻を反映した行={fukushoUpdated}, " +
                 $"RA情報未取得のままのSE={missingRaInfo}（RAより先にSEが来た/開催情報が別範囲だった等の可能性）");
             Console.WriteLine(
-                $"[{_source.SourceName}] HR診断: RA情報が見つからずスキップしたHR={hrRaceInfoMissing}件, " +
-                $"HR内の全券種払戻エントリ数={hrAnyPayoutEntries}件, うち複勝エントリ={hrFukushoSeen}件, " +
-                $"複勝のうち馬番がパースできなかった数={hrFukushoUnparseable}件");
+                $"[{_source.SourceName}] HR診断: HR内の全券種払戻エントリ数={hrAnyPayoutEntries}件, " +
+                $"うち複勝エントリ={hrFukushoSeen}件, 複勝のうち馬番がパースできなかった数={hrFukushoUnparseable}件, " +
+                $"反映待ちキュー件数={pendingFukusho.Count}件");
+
+            // ストリームを読み終えたので、race_entriesは全件揃っている。ここでまとめて反映する。
+            int fukushoUpdated = 0, fukushoNoMatch = 0, applied = 0;
+            batch = _store.BeginBatch();
+            try
+            {
+                foreach (var p in pendingFukusho)
+                {
+                    var affected = _store.UpdateFukushoPayout(p.RaceDate, p.TrackCode, p.RaceNumber, p.Umaban, p.Amount);
+                    if (affected > 0) fukushoUpdated += affected; else fukushoNoMatch++;
+                    applied++;
+
+                    if (applied % BatchSize == 0)
+                    {
+                        batch.Dispose();
+                        batch = _store.BeginBatch();
+                        Console.WriteLine($"[{_source.SourceName}] 複勝払戻の反映: {applied}/{pendingFukusho.Count}件処理");
+                    }
+                }
+            }
+            finally
+            {
+                batch.Dispose();
+            }
+
+            Console.WriteLine(
+                $"[{_source.SourceName}] 複勝払戻の反映完了: 実際に反映した行={fukushoUpdated}件, " +
+                $"対象行が見つからなかった数={fukushoNoMatch}件（取消・除外馬等でrace_entries行自体が無い場合を含む）");
         }
 
         /// <summary>坂路調教（SLOP dataspec, "HC"レコード）を取り込む。</summary>

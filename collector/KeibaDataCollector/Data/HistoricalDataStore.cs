@@ -175,27 +175,31 @@ namespace KeibaDataCollector.Data
         }
 
         /// <summary>HR（払戻）レコード側から、既に挿入済みのSE由来の行へ複勝払戻額を反映する。
-        /// ketto_numはHR側に無いため、umaban込みの複合キーで一致させる。race_numberも条件に含める。
-        /// distanceだけだと、同日・同競馬場内で距離が同じ別レース（地方競馬では珍しくない）の
-        /// 同じ馬番にまで払戻額が誤って反映されてしまうため
-        /// （実機で発覚：全馬のjockeyRoiが一律50点になっていた）。
-        /// 対象行が無くても（RAより前にHRが来る、等の想定外順序）例外にはしない
-        /// （ExecuteNonQueryは0件更新でも成功扱い）。</summary>
-        public void UpdateFukushoPayout(DateTime raceDate, string trackCode, int raceNumber, int distance, int umaban, double payoutAmount)
+        /// ketto_numはHR側に無いため、umaban込みの複合キーで一致させる。
+        /// race_numberを条件に含めているため、distanceは不要（同日・同競馬場・同レース番号なら
+        /// 距離を経由しなくても一意に絞り込める。以前はdistanceだけで突き合わせていたため、
+        /// 同日・同競馬場内で距離が同じ別レース（地方競馬では珍しくない）の同じ馬番にまで
+        /// 払戻額が誤って反映される不具合があった）。
+        /// 呼び出し側は「RA→SE→HRの順で届く」という前提を置かないこと。実機診断で、JV-Data
+        /// (Setup/RACEデータスペック)はこの順序を保証しない（同日内でHRがRA/SEより先に届く
+        /// ケースが実際にあった）ことを確認済み。そのため対象行がまだ無くても
+        /// （ExecuteNonQueryは0件更新でも例外にならない）失敗にはしない。
+        /// 呼び出し側は返り値（実際に更新できた行数）で反映できたかどうかを確認すること。</summary>
+        public int UpdateFukushoPayout(DateTime raceDate, string trackCode, int raceNumber, int umaban, double payoutAmount)
         {
-            Exec(@"
+            using (var cmd = new SQLiteCommand(@"
                 UPDATE race_entries SET fukusho_payout = @payout
                 WHERE race_date = @race_date AND track_code = @track_code
-                  AND race_number = @race_number AND distance = @distance AND umaban = @umaban;
-            ",
-                p => {
-                    p.AddWithValue("@payout", payoutAmount);
-                    p.AddWithValue("@race_date", raceDate.ToString("yyyy-MM-dd"));
-                    p.AddWithValue("@track_code", trackCode);
-                    p.AddWithValue("@race_number", raceNumber);
-                    p.AddWithValue("@distance", distance);
-                    p.AddWithValue("@umaban", umaban);
-                });
+                  AND race_number = @race_number AND umaban = @umaban;
+            ", _conn))
+            {
+                cmd.Parameters.AddWithValue("@payout", payoutAmount);
+                cmd.Parameters.AddWithValue("@race_date", raceDate.ToString("yyyy-MM-dd"));
+                cmd.Parameters.AddWithValue("@track_code", trackCode);
+                cmd.Parameters.AddWithValue("@race_number", raceNumber);
+                cmd.Parameters.AddWithValue("@umaban", umaban);
+                return cmd.ExecuteNonQuery();
+            }
         }
 
         public void UpsertTrainingLap(TrainingLapEntry e)
