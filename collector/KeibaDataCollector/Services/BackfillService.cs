@@ -73,6 +73,10 @@ namespace KeibaDataCollector.Services
             var raceInfoByKey = new Dictionary<string, (int Distance, string TrackSurfaceCode)>();
 
             int totalRecords = 0, seRecords = 0, raRecords = 0, hrRecords = 0, fukushoUpdated = 0, missingRaInfo = 0;
+            // 「複勝払戻を反映した行=0」の原因切り分け用の診断カウンタ。
+            // どの段階で0になっているかを見るため、HR処理のステップごとに数える。
+            int hrRaceInfoMissing = 0, hrAnyPayoutEntries = 0, hrFukushoSeen = 0, hrFukushoUnparseable = 0;
+            int hrFukushoSampleLogged = 0;
             var batch = _store.BeginBatch();
             try
             {
@@ -141,16 +145,32 @@ namespace KeibaDataCollector.Services
                         var key = RaceInfoKey(hr.id.Year, hr.id.MonthDay, hr.id.JyoCD, hr.id.RaceNum);
                         if (!raceInfoByKey.TryGetValue(key, out var raceInfo))
                         {
+                            hrRaceInfoMissing++;
                             continue; // 距離が分からない行は更新しようがないためスキップ。
                         }
 
                         // 複勝払戻だけを反映する（単勝回収率はrace_entriesのtansho_odds×着順1から
                         // 計算できるため、複勝以外の券種は6ファクターの集計には不要）。
                         var (payoutRaceKey, payouts) = JvRecordParser.ParsePayouts(buffer);
+                        hrAnyPayoutEntries += payouts.Count;
                         foreach (var payout in payouts)
                         {
                             if (payout.TicketType != "複勝") continue;
-                            if (!int.TryParse(payout.Combination, out var umaban) || umaban <= 0) continue;
+                            hrFukushoSeen++;
+
+                            if (hrFukushoSampleLogged < 5)
+                            {
+                                hrFukushoSampleLogged++;
+                                Console.WriteLine(
+                                    $"[{_source.SourceName}] 複勝払戻サンプル: race={key} Combination=\"{payout.Combination}\" " +
+                                    $"Amount={payout.Amount} Ninki={payout.Ninki}");
+                            }
+
+                            if (!int.TryParse(payout.Combination, out var umaban) || umaban <= 0)
+                            {
+                                hrFukushoUnparseable++;
+                                continue;
+                            }
 
                             _store.UpdateFukushoPayout(
                                 payoutRaceKey.RaceDate, payoutRaceKey.TrackCode, payoutRaceKey.RaceNumber,
@@ -177,6 +197,10 @@ namespace KeibaDataCollector.Services
                 $"[{_source.SourceName}] RACE取り込み完了: 全{totalRecords}件, SE={seRecords}, RA={raRecords}, HR={hrRecords}, " +
                 $"複勝払戻を反映した行={fukushoUpdated}, " +
                 $"RA情報未取得のままのSE={missingRaInfo}（RAより先にSEが来た/開催情報が別範囲だった等の可能性）");
+            Console.WriteLine(
+                $"[{_source.SourceName}] HR診断: RA情報が見つからずスキップしたHR={hrRaceInfoMissing}件, " +
+                $"HR内の全券種払戻エントリ数={hrAnyPayoutEntries}件, うち複勝エントリ={hrFukushoSeen}件, " +
+                $"複勝のうち馬番がパースできなかった数={hrFukushoUnparseable}件");
         }
 
         /// <summary>坂路調教（SLOP dataspec, "HC"レコード）を取り込む。</summary>
