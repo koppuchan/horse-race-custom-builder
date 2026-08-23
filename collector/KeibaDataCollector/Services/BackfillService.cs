@@ -13,7 +13,7 @@ namespace KeibaDataCollector.Services
     /// （中央+地方で数年分、件数は数十万〜数百万レコード規模になりうる）。
     ///
     /// 実行前に必ず"probe"コマンド（DataSpecProbeService）で、対象データ種別
-    /// （RACE/SLOP/WOOD/BLOD）が実際に読めるかを軽い範囲で確認してから流すこと。
+    /// （RACE/SLOP/WOOD/BLOD/BLDN）が実際に読めるかを軽い範囲で確認してから流すこと。
     /// dataspec名やレコードの並び順の一部（血統の父・母父インデックス等）はコード内コメントの通り
     /// 未検証の前提を含むため、いきなり全件流す前に少量で検算するのが安全。
     /// </summary>
@@ -300,27 +300,43 @@ namespace KeibaDataCollector.Services
             Console.WriteLine($"[{_source.SourceName}] {dataSpec}取り込み完了: 全{totalRecords}件中{expectedTypeId}={matched}件{dateRange}");
         }
 
-        /// <summary>血統（BLOD dataspec, "SK"産駒マスタ・"HN"繁殖馬マスタ）を取り込む。</summary>
+        /// <summary>血統（BLDN dataspec, "SK"産駒マスタ・"HN"繁殖馬マスタ）を取り込む。
+        ///
+        /// BLODではなくBLDNを使う理由（JRA-VAN公式JV-Data仕様書 Ver.4.9.0.1
+        /// 「データ種別一覧」シート・「変更履歴」シートで確認済み）:
+        /// 「蓄積系ソフト用 血統情報」のdataspec名は元々BLODのみだったが、2023年8月8日に
+        /// 18.繁殖馬マスタの「繁殖登録番号、父馬繁殖登録番号、母馬繁殖登録番号」が8バイト→
+        /// 10バイトに拡張された際、新フォーマットのデータ配信用にBLDNが追加された。
+        /// 同シートには「DIFN、BLDN、SNPN、HOSN、TCVN、RCVNは、2023年8月8日以降に
+        /// 提供しているデータが取得対象となります」と明記されている。つまりBLODは
+        /// 2023-08-08より前のデータのみ、BLDNは2023-08-08以降のデータのみを持つ
+        /// （両方合わせて1986年以降の全期間をカバーする設計）。
+        /// このプロジェクトのBackfillFromTime（実行日の3年前）は常に2023-08-08より後になるため、
+        /// BLDNだけで必要な範囲は足りる。また、このファイル内のJV_HN_HANSYOKU/JV_SK_SANKU
+        /// 構造体は繁殖登録番号を10バイトとしてパースする実装になっており（251/208バイトの
+        /// レコード長も現行仕様と一致）、これは新フォーマット（BLDN）向け。旧フォーマット
+        /// （BLOD、8バイト）のデータをこの構造体に流すとフィールドがずれて誤った値になる。
+        /// 実機診断: BLODをfromtime=3年前でSetup Openすると常にrc=-1（該当データなし）
+        /// だったが、これはBLODの提供範囲が2023-08-08で終わっているため、3年前という
+        /// fromtimeがその範囲より後ろになり「該当データなし」になっていただけだった。
         public void BackfillPedigree()
         {
-            // BackfillTrainingと同じ理由でSetup(3)を使う。実機確認で、Normal(1)だと
-            // SK:8,302件（≒1年分の新規産駒登録数）しか取れず、1986年以降の全履歴には
-            // 遠く及ばなかった。
-            var open = _source.Open("BLOD", BackfillFromTime, DataOption.Setup);
+            // BackfillTrainingと同じ理由でSetup(3)を使う。
+            var open = _source.Open("BLDN", BackfillFromTime, DataOption.Setup);
             if (open.ReturnCode == -1)
             {
                 _source.Close();
-                Console.WriteLine($"[{_source.SourceName}] BLOD: 該当データなし（このソースでは提供されていない可能性）。");
+                Console.WriteLine($"[{_source.SourceName}] BLDN: 該当データなし（このソースでは提供されていない可能性）。");
                 return;
             }
             if (open.ReturnCode < 0)
             {
                 _source.Close();
-                Console.WriteLine($"[{_source.SourceName}] BLOD Open失敗: {open.ReturnCode}（血統データのみスキップして続行）");
+                Console.WriteLine($"[{_source.SourceName}] BLDN Open失敗: {open.ReturnCode}（血統データのみスキップして続行）");
                 return;
             }
 
-            Console.WriteLine($"[{_source.SourceName}] BLOD 全履歴取得を開始します。");
+            Console.WriteLine($"[{_source.SourceName}] BLDN 全履歴取得を開始します。");
 
             int totalRecords = 0, skCount = 0, hnCount = 0;
             int? minBirthYear = null, maxBirthYear = null;
@@ -364,7 +380,7 @@ namespace KeibaDataCollector.Services
                     {
                         batch.Dispose();
                         batch = _store.BeginBatch();
-                        Console.WriteLine($"[{_source.SourceName}] BLOD進捗: {totalRecords}件処理（SK:{skCount} HN:{hnCount}）");
+                        Console.WriteLine($"[{_source.SourceName}] BLDN進捗: {totalRecords}件処理（SK:{skCount} HN:{hnCount}）");
                     }
                 }
             }
@@ -375,7 +391,7 @@ namespace KeibaDataCollector.Services
             }
 
             var birthYearRange = minBirthYear.HasValue ? $" 産駒の生年範囲=[{minBirthYear}〜{maxBirthYear}]" : "";
-            Console.WriteLine($"[{_source.SourceName}] BLOD取り込み完了: 全{totalRecords}件, SK={skCount}, HN={hnCount}{birthYearRange}");
+            Console.WriteLine($"[{_source.SourceName}] BLDN取り込み完了: 全{totalRecords}件, SK={skCount}, HN={hnCount}{birthYearRange}");
         }
 
         private static string RaceInfoKey(string year, string monthDay, string jyoCd, string raceNum) =>

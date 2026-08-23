@@ -54,7 +54,7 @@ namespace KeibaDataCollector.Services
         /// </param>
         public void Run(DateTime targetDate, string raceKeySlug = null)
         {
-            // SetupSpecsToProbe（SLOP/WOOD/BLOD）は特定レースに紐付かないため、
+            // SetupSpecsToProbe（SLOP/WOOD/BLOD/BLDN）は特定レースに紐付かないため、
             // 「本日のレースが見つかるか」に関係なく必ず実行する。
             // 以前はこのチェックより後段にあったため、中央競馬の非開催日に丸ごとスキップされていた
             // （UmaConn側の地方競馬は開催があっても、JV-Link側はそのまま何も調べずに終わっていた）。
@@ -85,7 +85,12 @@ namespace KeibaDataCollector.Services
         {
             ("SLOP", "坂路調教（HCレコード）"),
             ("WOOD", "ウッドチップ調教（WCレコード）"),
-            ("BLOD", "血統：産駒マスタ(SK)・繁殖馬マスタ(HN)"),
+            // BLODではなくBLDNをprobeする。JV-Data仕様書（Ver.4.9.0.1）で確認済み:
+            // 「蓄積系ソフト用 血統情報」はBLOD(2023-08-08より前)とBLDN(2023-08-08以降)の
+            // 2つのdataspecに分かれており、BackfillFromTime（実行日の3年前）は常に
+            // 2023-08-08より後になるため、実際に使うのはBLDN側。BackfillService.csの
+            // BackfillPedigree()も参照。
+            ("BLDN", "血統：産駒マスタ(SK)・繁殖馬マスタ(HN)"),
         };
 
         // 実機確認の結果、option=Normal(1)は「全履歴」ではなく直近およそ1年分しか返さない
@@ -141,7 +146,7 @@ namespace KeibaDataCollector.Services
             var typeCounts = new Dictionary<string, int>();
             // HC/WCは日付範囲を見て、実際に何年分取れているか（全履歴なのか直近の差分だけなのか）を
             // 判断する材料にする。件数だけでは「多いから全履歴」と誤解しかねない
-            // （実機確認: BLODのSKは8,302件しか無く、全履歴にしては少なすぎた）。
+            // （実機確認: BLOD(旧dataspec)のSKは8,302件しか無く、全履歴にしては少なすぎた）。
             DateTime? minDate = null, maxDate = null;
             try
             {
