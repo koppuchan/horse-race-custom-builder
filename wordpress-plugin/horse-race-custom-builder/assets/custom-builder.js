@@ -62,14 +62,25 @@
         }
         var weights = currentWeights();
 
+        // 加重平均で算出する（合計ではない）。合計だと、たまたま算出可能なファクターが
+        // 多い馬（母集団不足等でnullになりにくい馬）が、実際の質と関係なく高得点になって
+        // しまうため（例: 6ファクター中4つ算出できた馬 と 6つとも算出できた馬 を単純合計で
+        // 比べると、後者は「データが揃っていた」だけで加点され続けてしまう）。
+        // ONにした（重み>0の）ファクターのうち、その馬でnullでないものだけを使い、
+        // 重み付き平均＝Σ(値×重み) / Σ(重み) を取ることで、算出できたファクターの数に
+        // 関係なく公平に比較できるようにする。
         var scored = currentHorses.map(function (h) {
-            var score = 0;
+            var weightedSum = 0;
+            var weightTotal = 0;
             Object.keys(weights).forEach(function (key) {
                 var base = h[key];
-                if (typeof base === 'number') {
-                    score += base * weights[key];
+                var weight = weights[key];
+                if (weight > 0 && typeof base === 'number') {
+                    weightedSum += base * weight;
+                    weightTotal += weight;
                 }
             });
+            var score = weightTotal > 0 ? weightedSum / weightTotal : 0;
             return { horse: h, score: score };
         });
 

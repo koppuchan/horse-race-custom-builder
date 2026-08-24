@@ -51,13 +51,17 @@ namespace KeibaDataCollector.Services
         }
 
         /// <summary>①枠・馬場バイアス: 当該コース(track×distance×surface)における
-        /// 枠番別の連対率を、同条件の全枠番の分布の中で偏差値化する。</summary>
+        /// 枠番別の連対率「と」複勝回収率を、同条件の全枠番の分布の中でそれぞれ偏差値化し、
+        /// 平均する。クライアント基準「連対率・回収率ベース」に対応（当初は連対率のみだったが、
+        /// 「連対率・回収率」の回収率側が未実装のまま欠けていたため追加した）。
+        /// 回収率は複勝払戻（fukusho_payout）を使う（④騎手コース回収率と同じ計算方法）。</summary>
         private double? ComputeWakuBias(string trackCode, int distance, string surfaceCode, int waku)
         {
-            var rates = new Dictionary<int, double>();
+            var stats = new Dictionary<int, (double RentaiRate, double Roi)>();
             using (var cmd = new SQLiteCommand(@"
                 SELECT waku, COUNT(*) total,
-                       SUM(CASE WHEN chakujun BETWEEN 1 AND 2 THEN 1 ELSE 0 END) rentai
+                       SUM(CASE WHEN chakujun BETWEEN 1 AND 2 THEN 1 ELSE 0 END) rentai,
+                       SUM(COALESCE(fukusho_payout, 0)) payout
                 FROM race_entries
                 WHERE track_code=@track AND distance=@distance AND track_surface_code=@surface
                       AND chakujun > 0 AND waku BETWEEN 1 AND 8
@@ -71,12 +75,20 @@ namespace KeibaDataCollector.Services
                 using (var r = cmd.ExecuteReader())
                 {
                     while (r.Read())
-                        rates[r.GetInt32(0)] = (double)r.GetInt64(2) / r.GetInt64(1);
+                    {
+                        var total = r.GetInt64(1);
+                        stats[r.GetInt32(0)] = (
+                            (double)r.GetInt64(2) / total,
+                            r.GetDouble(3) / (total * 100.0));
+                    }
                 }
             }
 
-            if (!rates.TryGetValue(waku, out var thisRate) || rates.Count < 2) return null;
-            return ToDeviationScore(thisRate, rates.Values, invert: false);
+            if (!stats.TryGetValue(waku, out var thisStat) || stats.Count < 2) return null;
+
+            var rentaiScore = ToDeviationScore(thisStat.RentaiRate, stats.Values.Select(v => v.RentaiRate), invert: false);
+            var roiScore = ToDeviationScore(thisStat.Roi, stats.Values.Select(v => v.Roi), invert: false);
+            return (rentaiScore + roiScore) / 2.0;
         }
 
         /// <summary>②テン速度・展開: クライアント基準「近3走の前半3Fタイム・脚質実績からの
@@ -214,10 +226,12 @@ namespace KeibaDataCollector.Services
             return ToDeviationScore(thisRoi, rois.Values, invert: false);
         }
 
-        /// <summary>⑤血統適性・妙味: 種牡馬（父）の当該コース(track×distance)における産駒複勝率を、
-        /// 同条件で産駒が走った全種牡馬の分布内で偏差値化する。
-        /// 母父も同様に計算し、平均する（父だけだと種牡馬側のサンプルに偏りが出やすいため）。
-        /// pedigree_linksが空の場合（血統データ未取得）は常にnullを返す。</summary>
+        /// <summary>⑤血統適性・妙味: 種牡馬（父）の当該コース(track×distance)における
+        /// 産駒複勝率「と」産駒複勝回収率を、同条件で産駒が走った全種牡馬の分布内でそれぞれ
+        /// 偏差値化して平均する。クライアント基準「産駒複勝率・回収率」に対応
+        /// （当初は複勝率のみだったが、回収率側が未実装のまま欠けていたため追加した）。
+        /// 母父も同様に計算し、父スコアと平均する（父だけだと種牡馬側のサンプルに偏りが
+        /// 出やすいため）。pedigree_linksが空の場合（血統データ未取得）は常にnullを返す。</summary>
         private double? ComputePedigreeFit(string kettoNum, string trackCode, int distance)
         {
             string sire = null, broodmareSire = null;
@@ -247,10 +261,11 @@ namespace KeibaDataCollector.Services
 
         private double? ComputeSireLineScore(string trackCode, int distance, string hansyokuNum)
         {
-            var rates = new Dictionary<string, double>();
+            var stats = new Dictionary<string, (double PlaceRate, double Roi)>();
             using (var cmd = new SQLiteCommand(@"
                 SELECT pl.sire_hansyoku_num, COUNT(*) total,
-                       SUM(CASE WHEN re.chakujun BETWEEN 1 AND 3 THEN 1 ELSE 0 END) placed
+                       SUM(CASE WHEN re.chakujun BETWEEN 1 AND 3 THEN 1 ELSE 0 END) placed,
+                       SUM(COALESCE(re.fukusho_payout, 0)) payout
                 FROM race_entries re
                 JOIN pedigree_links pl ON re.ketto_num = pl.ketto_num
                 WHERE re.track_code=@track AND re.distance=@distance AND re.chakujun > 0
@@ -263,12 +278,20 @@ namespace KeibaDataCollector.Services
                 using (var r = cmd.ExecuteReader())
                 {
                     while (r.Read())
-                        rates[r.GetString(0)] = (double)r.GetInt64(2) / r.GetInt64(1);
+                    {
+                        var total = r.GetInt64(1);
+                        stats[r.GetString(0)] = (
+                            (double)r.GetInt64(2) / total,
+                            r.GetDouble(3) / (total * 100.0));
+                    }
                 }
             }
 
-            if (!rates.TryGetValue(hansyokuNum, out var thisRate) || rates.Count < 2) return null;
-            return ToDeviationScore(thisRate, rates.Values, invert: false);
+            if (!stats.TryGetValue(hansyokuNum, out var thisStat) || stats.Count < 2) return null;
+
+            var placeScore = ToDeviationScore(thisStat.PlaceRate, stats.Values.Select(v => v.PlaceRate), invert: false);
+            var roiScore = ToDeviationScore(thisStat.Roi, stats.Values.Select(v => v.Roi), invert: false);
+            return (placeScore + roiScore) / 2.0;
         }
 
         /// <summary>⑥調教・加速ラップ: 直近の調教（坂路 or ウッドチップ、新しい方）のラスト1F
