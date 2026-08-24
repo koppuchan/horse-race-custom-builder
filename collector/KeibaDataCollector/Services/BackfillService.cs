@@ -303,43 +303,56 @@ namespace KeibaDataCollector.Services
             Console.WriteLine($"[{_source.SourceName}] {dataSpec}取り込み完了: 全{totalRecords}件中{expectedTypeId}={matched}件{dateRange}");
         }
 
-        /// <summary>血統（BLDN dataspec, "SK"産駒マスタ・"HN"繁殖馬マスタ）を取り込む。
+        // BLODの提供範囲（1986年以降〜2023-08-08より前）を漏れなく取るためのfromtime。
+        // BackfillFromTime（実行日の3年前）を使うと、現在出走している馬の大半が
+        // それより前に生まれている（＝血統登録済みである）ため血統が取れない
+        // （実機診断: BLDNのみ backfill した結果、596頭中32頭＝約5%しか血統が付かなかった。
+        // 残り95%は2023-08-08より前に登録された馬で、BLOD側にしかデータが無かった）。
+        private const string PedigreeLegacyFromTime = "19860101000000";
+
+        /// <summary>血統（"SK"産駒マスタ・"HN"繁殖馬マスタ）を取り込む。
         ///
-        /// BLODではなくBLDNを使う理由（JRA-VAN公式JV-Data仕様書 Ver.4.9.0.1
+        /// dataspecが2つに分かれている理由（JRA-VAN公式JV-Data仕様書 Ver.4.9.0.1
         /// 「データ種別一覧」シート・「変更履歴」シートで確認済み）:
-        /// 「蓄積系ソフト用 血統情報」のdataspec名は元々BLODのみだったが、2023年8月8日に
-        /// 18.繁殖馬マスタの「繁殖登録番号、父馬繁殖登録番号、母馬繁殖登録番号」が8バイト→
-        /// 10バイトに拡張された際、新フォーマットのデータ配信用にBLDNが追加された。
-        /// 同シートには「DIFN、BLDN、SNPN、HOSN、TCVN、RCVNは、2023年8月8日以降に
-        /// 提供しているデータが取得対象となります」と明記されている。つまりBLODは
-        /// 2023-08-08より前のデータのみ、BLDNは2023-08-08以降のデータのみを持つ
-        /// （両方合わせて1986年以降の全期間をカバーする設計）。
-        /// このプロジェクトのBackfillFromTime（実行日の3年前）は常に2023-08-08より後になるため、
-        /// BLDNだけで必要な範囲は足りる。また、このファイル内のJV_HN_HANSYOKU/JV_SK_SANKU
-        /// 構造体は繁殖登録番号を10バイトとしてパースする実装になっており（251/208バイトの
-        /// レコード長も現行仕様と一致）、これは新フォーマット（BLDN）向け。旧フォーマット
-        /// （BLOD、8バイト）のデータをこの構造体に流すとフィールドがずれて誤った値になる。
-        /// 実機診断: BLODをfromtime=3年前でSetup Openすると常にrc=-1（該当データなし）
-        /// だったが、これはBLODの提供範囲が2023-08-08で終わっているため、3年前という
-        /// fromtimeがその範囲より後ろになり「該当データなし」になっていただけだった。
+        /// 「蓄積系ソフト用 血統情報」は、2023年8月8日の18.繁殖馬マスタ項目拡張
+        /// （繁殖登録番号・父馬繁殖登録番号・母馬繁殖登録番号が8バイト→10バイト、
+        /// 19.産駒マスタの生産者コードも6バイト→8バイト、3代血統繁殖登録番号も8→10バイト）
+        /// を境に、`BLOD`（それ以前・旧8バイト形式のデータのみ）と`BLDN`（それ以降・
+        /// 新10バイト形式のデータのみ）に分かれている。「1986年以降の繁殖馬情報」という
+        /// 提供範囲は両方合わせて初めて成立する。
+        ///
+        /// 当初BLDNだけをBackfillFromTime（実行日の3年前）でSetup Openしていたが、
+        /// これだと2023-08-08以降に登録された（＝生まれの遅い）馬の血統しか取れず、
+        /// 実機で596頭中32頭（約5%）しか血統適性・妙味のスコアが付かなかった。
+        /// 現在出走する馬の大半は2023-08-08より前に生まれている＝血統登録もそれより前のため、
+        /// BLOD側を別途、広い範囲（1986年以降＝PedigreeLegacyFromTime）で取り込む必要がある。
+        /// BLODは旧8バイト形式のため、新形式向けのJV_HN_HANSYOKU/JV_SK_SANKUではなく、
+        /// 専用の旧形式構造体（JV_HN_HANSYOKU_OLD/JV_SK_SANKU_OLD、JVData_Struct.cs）で
+        /// パースする（バイト位置がずれるフィールドを混同しないため）。</summary>
         public void BackfillPedigree()
         {
+            BackfillPedigreeSpec("BLDN", BackfillFromTime, isLegacyFormat: false);
+            BackfillPedigreeSpec("BLOD", PedigreeLegacyFromTime, isLegacyFormat: true);
+        }
+
+        private void BackfillPedigreeSpec(string dataSpec, string fromTime, bool isLegacyFormat)
+        {
             // BackfillTrainingと同じ理由でSetup(3)を使う。
-            var open = _source.Open("BLDN", BackfillFromTime, DataOption.Setup);
+            var open = _source.Open(dataSpec, fromTime, DataOption.Setup);
             if (open.ReturnCode == -1)
             {
                 _source.Close();
-                Console.WriteLine($"[{_source.SourceName}] BLDN: 該当データなし（このソースでは提供されていない可能性）。");
+                Console.WriteLine($"[{_source.SourceName}] {dataSpec}: 該当データなし（このソースでは提供されていない可能性）。");
                 return;
             }
             if (open.ReturnCode < 0)
             {
                 _source.Close();
-                Console.WriteLine($"[{_source.SourceName}] BLDN Open失敗: {open.ReturnCode}（血統データのみスキップして続行）");
+                Console.WriteLine($"[{_source.SourceName}] {dataSpec} Open失敗: {open.ReturnCode}（血統データのみスキップして続行）");
                 return;
             }
 
-            Console.WriteLine($"[{_source.SourceName}] BLDN 全履歴取得を開始します。");
+            Console.WriteLine($"[{_source.SourceName}] {dataSpec} 全履歴取得を開始します（{(isLegacyFormat ? "旧8バイト形式" : "新10バイト形式")}）。");
 
             int totalRecords = 0, skCount = 0, hnCount = 0;
             int? minBirthYear = null, maxBirthYear = null;
@@ -360,7 +373,9 @@ namespace KeibaDataCollector.Services
                     if (typeId == "SK")
                     {
                         skCount++;
-                        var link = JvFactorRecordParser.ParseOffspringPedigree(buffer);
+                        var link = isLegacyFormat
+                            ? JvFactorRecordParser.ParseOffspringPedigreeLegacy(buffer)
+                            : JvFactorRecordParser.ParseOffspringPedigree(buffer);
                         if (!string.IsNullOrEmpty(link.KettoNum))
                             _store.UpsertPedigreeLink(link);
 
@@ -374,7 +389,9 @@ namespace KeibaDataCollector.Services
                     else if (typeId == "HN")
                     {
                         hnCount++;
-                        var name = JvFactorRecordParser.ParseBroodstockName(buffer);
+                        var name = isLegacyFormat
+                            ? JvFactorRecordParser.ParseBroodstockNameLegacy(buffer)
+                            : JvFactorRecordParser.ParseBroodstockName(buffer);
                         if (!string.IsNullOrEmpty(name.HansyokuNum))
                             _store.UpsertBroodstockName(name);
                     }
@@ -383,7 +400,7 @@ namespace KeibaDataCollector.Services
                     {
                         batch.Dispose();
                         batch = _store.BeginBatch();
-                        Console.WriteLine($"[{_source.SourceName}] BLDN進捗: {totalRecords}件処理（SK:{skCount} HN:{hnCount}）");
+                        Console.WriteLine($"[{_source.SourceName}] {dataSpec}進捗: {totalRecords}件処理（SK:{skCount} HN:{hnCount}）");
                     }
                 }
             }
@@ -394,7 +411,7 @@ namespace KeibaDataCollector.Services
             }
 
             var birthYearRange = minBirthYear.HasValue ? $" 産駒の生年範囲=[{minBirthYear}〜{maxBirthYear}]" : "";
-            Console.WriteLine($"[{_source.SourceName}] BLDN取り込み完了: 全{totalRecords}件, SK={skCount}, HN={hnCount}{birthYearRange}");
+            Console.WriteLine($"[{_source.SourceName}] {dataSpec}取り込み完了: 全{totalRecords}件, SK={skCount}, HN={hnCount}{birthYearRange}");
         }
 
         private static string RaceInfoKey(string year, string monthDay, string jyoCd, string raceNum) =>

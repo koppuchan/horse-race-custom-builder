@@ -101,6 +101,39 @@ namespace KeibaDataCollector.Interop
             };
         }
 
+        /// <summary>BLOD dataspec（2023-08-08より前の血統データ）から届く"SK"レコードを、
+        /// 旧形式（繁殖登録番号8バイト）でパースする。並び順（0:父 4:母父）はBLDN側と同じ。
+        /// BackfillFromTimeだけでは2023-08-08より前に登録された馬の血統が一切取れない
+        /// （現在出走している馬の大半はそれ以前に生まれている）ため、BLOD側も別途
+        /// 広い範囲で取り込む必要がある（BackfillService.BackfillPedigree参照）。</summary>
+        public static PedigreeLink ParseOffspringPedigreeLegacy(string rawRecord)
+        {
+            var sk = new JV_SK_SANKU_OLD();
+            sk.SetDataB(ref rawRecord);
+
+            return new PedigreeLink
+            {
+                KettoNum = Trim(sk.KettoNum),
+                SireHansyokuNum = sk.HansyokuNum != null && sk.HansyokuNum.Length > 0 ? Trim(sk.HansyokuNum[0]) : string.Empty,
+                BroodmareSireHansyokuNum = sk.HansyokuNum != null && sk.HansyokuNum.Length > 4 ? Trim(sk.HansyokuNum[4]) : string.Empty,
+                BirthDate = ParseYmd(sk.BirthDate),
+            };
+        }
+
+        /// <summary>BLOD dataspec（2023-08-08より前の血統データ）から届く"HN"レコードを、
+        /// 旧形式（繁殖登録番号8バイト）でパースする。</summary>
+        public static BroodstockName ParseBroodstockNameLegacy(string rawRecord)
+        {
+            var hn = new JV_HN_HANSYOKU_OLD();
+            hn.SetDataB(ref rawRecord);
+
+            return new BroodstockName
+            {
+                HansyokuNum = Trim(hn.HansyokuNum),
+                Bamei = Trim(hn.Bamei),
+            };
+        }
+
         /// <summary>RAレコードのCornerInfo配列から、最も早い（コーナー番号が最小の）
         /// 通過順位テキストを選び、先頭から並んだ馬番の配列に変換する。②テン速度・展開
         /// （脚質実績）で「その馬がどれだけ前目で競馬をする馬か」を求めるための入力。

@@ -2574,6 +2574,117 @@ public static class JVData_Struct
 
     #endregion
 
+    #region 16-17.繁殖馬マスタ・産駒マスタ（BLOD旧形式、2023-08-08より前のデータ用）
+
+    /// <summary>BLOD dataspec（2023-08-08より前の血統データ）向けの繁殖馬マスタ。
+    /// JV_HN_HANSYOKU（新形式・BLDN向け）との違いは、繁殖登録番号／父馬繁殖登録番号／
+    /// 母馬繁殖登録番号が10バイトではなく8バイトであること（2023-08-08の仕様変更前の幅）。
+    /// バイト位置は、JV-Data仕様書Ver.4.9.0.1の変更履歴シートに明記された変更内容
+    /// 「18.繁殖馬マスタの「繁殖登録番号、父馬繁殖登録番号、母馬繁殖登録番号」8バイト⇒10バイト」
+    /// をもとに、現行仕様（JV_HN_HANSYOKU、251バイト）から逆算して導出した
+    /// （公式仕様書に旧形式そのものの位置一覧は掲載されていないため）。
+    /// 総レコード長は251-6=245バイト。</summary>
+    public struct JV_HN_HANSYOKU_OLD
+    {
+        public RECORD_ID head;
+        public string HansyokuNum;          // 繁殖登録番号（旧8バイト）
+        public string reserved;
+        public string KettoNum;             // 血統登録番号
+        public string DelKubun;
+        public string Bamei;
+        public string BameiKana;
+        public string BameiEng;
+        public string BirthYear;
+        public string SexCD;
+        public string HinsyuCD;
+        public string KeiroCD;
+        public string HansyokuMochiKubun;
+        public string ImportYear;
+        public string SanchiName;
+        public string HansyokuFNum;         // 父馬繁殖登録番号（旧8バイト）
+        public string HansyokuMNum;         // 母馬繁殖登録番号（旧8バイト）
+        public string crlf;
+
+        public void SetDataB(ref string strBuff)
+        {
+            byte[] bBuff = Str2Byte(ref strBuff);
+
+            head.SetDataB(MidB2B(ref bBuff, 1, 11));
+            HansyokuNum = MidB2S(ref bBuff, 12, 8);
+            reserved = MidB2S(ref bBuff, 20, 8);
+            KettoNum = MidB2S(ref bBuff, 28, 10);
+            DelKubun = MidB2S(ref bBuff, 38, 1);
+            Bamei = MidB2S(ref bBuff, 39, 36);
+            BameiKana = MidB2S(ref bBuff, 75, 40);
+            BameiEng = MidB2S(ref bBuff, 115, 80);
+            BirthYear = MidB2S(ref bBuff, 195, 4);
+            SexCD = MidB2S(ref bBuff, 199, 1);
+            HinsyuCD = MidB2S(ref bBuff, 200, 1);
+            KeiroCD = MidB2S(ref bBuff, 201, 2);
+            HansyokuMochiKubun = MidB2S(ref bBuff, 203, 1);
+            ImportYear = MidB2S(ref bBuff, 204, 4);
+            SanchiName = MidB2S(ref bBuff, 208, 20);
+            HansyokuFNum = MidB2S(ref bBuff, 228, 8);
+            HansyokuMNum = MidB2S(ref bBuff, 236, 8);
+            crlf = MidB2S(ref bBuff, 244, 2);
+            bBuff = null;
+        }
+    }
+
+    /// <summary>BLOD dataspec（2023-08-08より前の血統データ）向けの産駒マスタ。
+    /// JV_SK_SANKU（新形式・BLDN向け）との違いは、生産者コードが8バイトではなく6バイト、
+    /// 3代血統繁殖登録番号14件がそれぞれ10バイトではなく8バイトであること。
+    /// バイト位置は変更履歴の記載（「19.産駒マスタの「生産者コード」6バイト⇒8バイト、
+    /// 「3代血統 繁殖登録番号」8バイト⇒10バイト」）をもとに、現行仕様（JV_SK_SANKU、
+    /// 208バイト）から逆算して導出。総レコード長は208-30=178バイト。</summary>
+    public struct JV_SK_SANKU_OLD
+    {
+        public RECORD_ID head;
+        public string KettoNum;
+        public YMD BirthDate;
+        public string SexCD;
+        public string HinsyuCD;
+        public string KeiroCD;
+        public string SankuMochiKubun;
+        public string ImportYear;
+        public string BreederCode;          // 生産者コード（旧6バイト）
+        public string SanchiName;
+        public string[] HansyokuNum;        // 3代血統 繁殖登録番号（旧8バイト×14）
+        public string crlf;
+
+        public void Initialize()
+        {
+            HansyokuNum = new string[14];
+        }
+
+        public void SetDataB(ref string strBuff)
+        {
+            Initialize();
+            byte[] bBuff = Str2Byte(ref strBuff);
+
+            head.SetDataB(MidB2B(ref bBuff, 1, 11));
+            KettoNum = MidB2S(ref bBuff, 12, 10);
+            BirthDate.SetDataB(MidB2B(ref bBuff, 22, 8));
+            SexCD = MidB2S(ref bBuff, 30, 1);
+            HinsyuCD = MidB2S(ref bBuff, 31, 1);
+            KeiroCD = MidB2S(ref bBuff, 32, 2);
+            SankuMochiKubun = MidB2S(ref bBuff, 34, 1);
+            ImportYear = MidB2S(ref bBuff, 35, 4);
+            BreederCode = MidB2S(ref bBuff, 39, 6);
+            SanchiName = MidB2S(ref bBuff, 45, 20);
+
+            for (int i = 0; i < 14; i++)
+            {
+                HansyokuNum[i] = MidB2S(ref bBuff, 65 + (8 * i), 8);
+            }
+
+            crlf = MidB2S(ref bBuff, 177, 2);
+            bBuff = null;
+        }
+    }
+
+    #endregion
+
     #region 18.レコードマスタ
 
     /// <summary>
