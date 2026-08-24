@@ -3,15 +3,15 @@
  * Plugin Name: 競馬予想カスタムビルダー
  * Description: 既存の Keiba Race Sync（race カスタム投稿タイプ）のデータに、プロ厳選6ファクターを重ね合わせ、
  *              ユーザーが重み付けした「My総合指数」をクライアント側で即時算出・表示する。LINEログインで全レース解放。
- * Version: 0.4.0
+ * Version: 0.5.0
  */
 
 if (!defined('ABSPATH')) {
     exit;
 }
 
-define('HRC_VERSION', '0.4.0');
-define('HRC_ASSET_VER', '0.4.0');
+define('HRC_VERSION', '0.5.0');
+define('HRC_ASSET_VER', '0.5.0');
 define('HRC_FACTOR_KEYS', array(
     'param_bias', 'param_pace', 'param_agari_q',
     'param_jockey_roi', 'param_pedigree_fit', 'param_training_acc',
@@ -133,6 +133,12 @@ add_action('admin_init', function () {
     register_setting('hrc_settings', 'hrc_line_channel_id', array('sanitize_callback' => 'sanitize_text_field'));
     register_setting('hrc_settings', 'hrc_line_channel_secret', array('sanitize_callback' => 'sanitize_text_field'));
     register_setting('hrc_settings', 'hrc_line_add_friend_url', array('sanitize_callback' => 'esc_url_raw'));
+    register_setting('hrc_settings', 'hrc_unlock_secret_key', array('sanitize_callback' => 'sanitize_text_field'));
+
+    // 未設定なら初回アクセス時に自動生成する（空のキーで誰でも解放できてしまうのを防ぐため）。
+    if (empty(get_option('hrc_unlock_secret_key'))) {
+        update_option('hrc_unlock_secret_key', wp_generate_password(32, false));
+    }
 });
 
 function hrc_render_settings_page()
@@ -143,9 +149,12 @@ function hrc_render_settings_page()
     ?>
     <div class="wrap">
         <h1>競馬カスタムビルダー設定</h1>
-        <p>LINEログイン連携用のチャネル情報を入力してください（LINE Developers Console で発行したもの）。</p>
+        <p>全レース解放の方法は2通りあります。①LINEログイン（下記チャネル情報が必要）と、
+            ②秘密キー付きURL（LINEの設定なしで使える簡易版。友だち限定でリンクを配布する運用向け）。
+            どちらも同じ「アンロック済み」状態として扱われます。</p>
         <form method="post" action="options.php">
             <?php settings_fields('hrc_settings'); ?>
+            <h2>①LINEログイン連携</h2>
             <table class="form-table">
                 <tr>
                     <th><label for="hrc_line_channel_id">Channel ID</label></th>
@@ -171,6 +180,23 @@ function hrc_render_settings_page()
             </table>
             <p>コールバックURL（LINE Developers Console側にこの値を設定してください）：<br>
                 <code><?php echo esc_url(rest_url('hrc/v1/line/callback')); ?></code></p>
+
+            <h2>②秘密キー付きURL（LINEログイン不要の簡易解放）</h2>
+            <table class="form-table">
+                <tr>
+                    <th><label for="hrc_unlock_secret_key">秘密キー</label></th>
+                    <td><input type="text" id="hrc_unlock_secret_key" name="hrc_unlock_secret_key"
+                            value="<?php echo esc_attr(get_option('hrc_unlock_secret_key')); ?>" class="regular-text">
+                        <p class="description">
+                            カスタムビルダーを設置しているページのURLの末尾に
+                            <code>?hrc_key=<?php echo esc_html(get_option('hrc_unlock_secret_key')); ?></code>
+                            を付けたリンクを、LINE公式アカウントのリッチメニューやメッセージから配布してください。
+                            そのリンクを開いた人だけ、以後30日間すべてのレースが解放されます
+                            （LINEログインと同じ扱いで、通常のページURLは今まで通りロックされたままです）。
+                            このキーを変更すると、古いリンクは無効になります。
+                        </p></td>
+                </tr>
+            </table>
             <?php submit_button(); ?>
         </form>
     </div>
@@ -214,6 +240,44 @@ function hrc_is_unlocked()
     $expected = hash_hmac('sha256', $line_user_id . '|' . $expires, wp_salt('auth'));
     return hash_equals($expected, $signature);
 }
+
+/* ------------------------------------------------------------------------- *
+ * 秘密キー付きURLによる解放（LINEログインが使えない場合の簡易代替）
+ *
+ * お客様のご要望: LINEログイン（LINE Developers Console側のチャネル設定の問題で、
+ * 認可画面の代わりに公式LINEの管理画面に遷移してしまう不具合が確認された）が難しい場合、
+ * ①通常のロック済みページと、②LINE公式アカウントのメニュー等からのみ配布する全解放リンクの
+ * 2種類で運用したいとのご提案。LINEログインを直すのではなく、こちらの簡易版を実装する方針。
+ *
+ * カスタムビルダーのページURLに ?hrc_key=(秘密キー) を付けてアクセスすると、
+ * LINEログイン成功時と同じ署名付きCookie（hrc_issue_unlock_cookie）を発行し、
+ * 秘密キーをURLから取り除いた上でリダイレクトする（Refererヘッダー等でキーが漏れるのを防ぐため、
+ * キー付きURLをそのまま表示・保持し続けないようにしている）。以後はLINEログイン済みの場合と
+ * 完全に同じ扱いになる（hrc_is_unlockedが共通で判定するため）。
+ * ------------------------------------------------------------------------- */
+
+define('HRC_UNLOCK_QUERY_PARAM', 'hrc_key');
+
+add_action('init', function () {
+    if (is_admin() || empty($_GET[HRC_UNLOCK_QUERY_PARAM])) {
+        return;
+    }
+
+    $provided = sanitize_text_field(wp_unslash($_GET[HRC_UNLOCK_QUERY_PARAM]));
+    $secret = get_option('hrc_unlock_secret_key');
+    $unlocked_now = (!empty($secret) && hash_equals((string) $secret, $provided));
+
+    if ($unlocked_now) {
+        hrc_issue_unlock_cookie('secret-link');
+    }
+
+    $redirect = remove_query_arg(HRC_UNLOCK_QUERY_PARAM);
+    if ($unlocked_now) {
+        $redirect = add_query_arg('hrc_unlocked', '1', $redirect);
+    }
+    wp_safe_redirect($redirect);
+    exit;
+});
 
 /* ------------------------------------------------------------------------- *
  * LINEログイン：認可URLの発行とコールバック処理
