@@ -3,15 +3,15 @@
  * Plugin Name: 競馬予想カスタムビルダー
  * Description: 既存の Keiba Race Sync（race カスタム投稿タイプ）のデータに、プロ厳選6ファクターを重ね合わせ、
  *              ユーザーが重み付けした「My総合指数」をクライアント側で即時算出・表示する。LINEログインで全レース解放。
- * Version: 0.5.0
+ * Version: 0.5.1
  */
 
 if (!defined('ABSPATH')) {
     exit;
 }
 
-define('HRC_VERSION', '0.5.0');
-define('HRC_ASSET_VER', '0.5.0');
+define('HRC_VERSION', '0.5.1');
+define('HRC_ASSET_VER', '0.5.1');
 define('HRC_FACTOR_KEYS', array(
     'param_bias', 'param_pace', 'param_agari_q',
     'param_jockey_roi', 'param_pedigree_fit', 'param_training_acc',
@@ -566,8 +566,23 @@ add_shortcode('keiba_custom_builder', function ($atts) {
         </div>
 
         <div id="hrc-locked-notice" class="hrc-locked-notice" hidden>
-            <p>全レースの診断機能は、公式LINE友だち追加で即時アンロックされます。</p>
-            <button type="button" id="hrc-line-unlock-btn">LINEで無料アンロック</button>
+            <p>全レースの診断機能は、公式LINE友だち追加で解放されます。</p>
+            <?php
+            // LINEログインボタンは、LINE Developers Console側のチャネル設定の問題で
+            // 現状機能しないため非表示にしている（お客様のご要望・2026年対応）。
+            // バックエンドのLINEログインコード自体は残しており、設定さえ直れば
+            // ここのコメントアウトを外すだけで復活できる。
+            //
+            // <button type="button" id="hrc-line-unlock-btn">LINEで無料アンロック</button>
+            //
+            // 代わりに、友だち追加後にLINE公式アカウントから配布する専用リンク
+            // （秘密キー付きURL。設定画面の「②秘密キー付きURL」参照）で解放する運用に変更。
+            $add_friend_url = get_option('hrc_line_add_friend_url');
+            if (!empty($add_friend_url)) :
+            ?>
+                <a href="<?php echo esc_url($add_friend_url); ?>" target="_blank" rel="noopener" class="hrc-add-friend-cta">友だち追加はこちら</a>
+                <p class="hrc-locked-notice-sub">友だち追加後、LINEでお送りする専用リンクから全レースが解放されます。</p>
+            <?php endif; ?>
         </div>
 
         <div id="hrc-add-friend-banner" class="hrc-add-friend-banner" hidden>

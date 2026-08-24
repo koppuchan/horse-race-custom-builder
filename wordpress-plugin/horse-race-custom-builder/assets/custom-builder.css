@@ -112,6 +112,23 @@
     cursor: pointer;
 }
 
+.hrc-add-friend-cta {
+    display: inline-block;
+    margin-top: 12px;
+    padding: 12px 24px;
+    background: #06c755;
+    color: #fff;
+    border-radius: 6px;
+    font-size: 1.05em;
+    text-decoration: none;
+}
+
+.hrc-locked-notice-sub {
+    margin-top: 10px;
+    font-size: 0.9em;
+    color: #555;
+}
+
 .hrc-add-friend-banner {
     position: relative;
     text-align: center;
