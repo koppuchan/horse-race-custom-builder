@@ -3,15 +3,15 @@
  * Plugin Name: 競馬予想カスタムビルダー
  * Description: 既存の Keiba Race Sync（race カスタム投稿タイプ）のデータに、プロ厳選6ファクターを重ね合わせ、
  *              ユーザーが重み付けした「My総合指数」をクライアント側で即時算出・表示する。LINEログインで全レース解放。
- * Version: 0.5.1
+ * Version: 0.5.2
  */
 
 if (!defined('ABSPATH')) {
     exit;
 }
 
-define('HRC_VERSION', '0.5.1');
-define('HRC_ASSET_VER', '0.5.1');
+define('HRC_VERSION', '0.5.2');
+define('HRC_ASSET_VER', '0.5.2');
 define('HRC_FACTOR_KEYS', array(
     'param_bias', 'param_pace', 'param_agari_q',
     'param_jockey_roi', 'param_pedigree_fit', 'param_training_acc',

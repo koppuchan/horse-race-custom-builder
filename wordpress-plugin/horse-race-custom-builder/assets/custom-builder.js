@@ -140,6 +140,15 @@
                     step2.hidden = false;
                     step3.hidden = false;
                     renderRanking();
+
+                    // スマホでは、STEP1のレースボタンをタップした後に自動でSTEP2まで
+                    // スクロールする（クライアント要望：タップ後に手動スクロールする
+                    // 一手間を無くすため）。デスクトップは既にSTEP2が視界に収まっている
+                    // ことが多く、強制スクロールするとかえって不自然なジャンプになるため、
+                    // スマホ相当の狭い画面幅に限定する。
+                    if (window.matchMedia && window.matchMedia('(max-width: 767px)').matches) {
+                        step2.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
                 });
         });
     });
