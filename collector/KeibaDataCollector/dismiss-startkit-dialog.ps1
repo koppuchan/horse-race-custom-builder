@@ -57,61 +57,76 @@ function Write-Log([string]$Message) {
     }
 }
 
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
+# Log immediately, before anything that could fail (Add-Type, UI Automation
+# calls), so a silent crash still leaves a trace of how far the script got.
+# A prior run left no log output at all - not even this line would have been
+# written yet at that point - which is itself the clue that the failure was
+# somewhere in Add-Type or the automation calls below, not in the polling
+# logic; wrapping those in try/catch (below) turns that guess into a real
+# error message next time instead of another silent gap.
+Write-Log "dismiss-startkit-dialog.ps1 launched (timeout=${TimeoutSeconds}s)"
 
-# "SetupTitle" = the dialog's window title, katakana for "Setup".
-$setupTitle = -join @([char]0x30BB, [char]0x30C3, [char]0x30C8, [char]0x30A2, [char]0x30C3, [char]0x30D7)
-# "NoKitPhrase" = substring of the "does not have a start kit" radio button label.
-$noKitPhrase = -join @([char]0x6301, [char]0x3063, [char]0x3066, [char]0x3044, [char]0x306A, [char]0x3044)
+try {
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+    Write-Log "UI Automation assemblies loaded OK."
 
-Write-Log "dismiss-startkit-dialog watcher started (timeout=${TimeoutSeconds}s)"
+    # "SetupTitle" = the dialog's window title, katakana for "Setup".
+    $setupTitle = -join @([char]0x30BB, [char]0x30C3, [char]0x30C8, [char]0x30A2, [char]0x30C3, [char]0x30D7)
+    # "NoKitPhrase" = substring of the "does not have a start kit" radio button label.
+    $noKitPhrase = -join @([char]0x6301, [char]0x3063, [char]0x3066, [char]0x3044, [char]0x306A, [char]0x3044)
 
-$deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-$root = [System.Windows.Automation.AutomationElement]::RootElement
-$dismissCount = 0
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $dismissCount = 0
 
-while ((Get-Date) -lt $deadline) {
-    $titleCondition = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::NameProperty, $setupTitle)
-    $dialog = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $titleCondition)
+    while ((Get-Date) -lt $deadline) {
+        $titleCondition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::NameProperty, $setupTitle)
+        $dialog = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $titleCondition)
 
-    if ($dialog -ne $null) {
-        $radioCondition = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::RadioButton)
-        $radios = $dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants, $radioCondition)
+        if ($dialog -ne $null) {
+            $radioCondition = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::RadioButton)
+            $radios = $dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants, $radioCondition)
 
-        $target = $null
-        foreach ($r in $radios) {
-            if ($r.Current.Name -like "*$noKitPhrase*") {
-                $target = $r
-                break
+            $target = $null
+            foreach ($r in $radios) {
+                if ($r.Current.Name -like "*$noKitPhrase*") {
+                    $target = $r
+                    break
+                }
+            }
+
+            if ($target -ne $null) {
+                $selectPattern = $target.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                $selectPattern.Select()
+                Start-Sleep -Milliseconds 300
+
+                $okCondition = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::NameProperty, "OK")
+                $okButton = $dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $okCondition)
+
+                if ($okButton -ne $null) {
+                    $invokePattern = $okButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                    $invokePattern.Invoke()
+                    $dismissCount++
+                    Write-Log "Dismissed setup dialog #${dismissCount}: selected no-start-kit option and clicked OK. Continuing to watch (may reappear for the next dataspec)."
+                } else {
+                    Write-Log "Found setup dialog and radio button but could not find OK button. Will retry on the next poll."
+                }
             }
         }
 
-        if ($target -ne $null) {
-            $selectPattern = $target.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-            $selectPattern.Select()
-            Start-Sleep -Milliseconds 300
-
-            $okCondition = New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::NameProperty, "OK")
-            $okButton = $dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $okCondition)
-
-            if ($okButton -ne $null) {
-                $invokePattern = $okButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-                $invokePattern.Invoke()
-                $dismissCount++
-                Write-Log "Dismissed setup dialog #${dismissCount}: selected no-start-kit option and clicked OK. Continuing to watch (may reappear for the next dataspec)."
-            } else {
-                Write-Log "Found setup dialog and radio button but could not find OK button. Will retry on the next poll."
-            }
-        }
+        Start-Sleep -Seconds 2
     }
 
-    Start-Sleep -Seconds 2
+    Write-Log "Timeout reached (dismissed ${dismissCount} dialog(s) total); stopping watcher."
+    exit 0
+} catch {
+    $errorDetail = ($_.InvocationInfo.PositionMessage -replace '[\r\n]+', ' ')
+    Write-Log "ERROR: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
+    Write-Log "ERROR detail: $errorDetail"
+    exit 1
 }
-
-Write-Log "Timeout reached (dismissed ${dismissCount} dialog(s) total); stopping watcher."
-exit 0
