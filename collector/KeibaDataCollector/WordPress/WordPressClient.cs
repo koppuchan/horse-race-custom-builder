@@ -134,10 +134,28 @@ namespace KeibaDataCollector.WordPress
         /// predictionsと同じ「馬番文字列キー」の取り決め。race_card等の既存メタは一切送らない
         /// （UpsertPredictionsAsyncと同じ理由: 別バッチが持つ項目を上書きしない）。
         /// nullのファクターは送らない（未算出であることが分かるよう、フィールド自体を省く）。</summary>
-        public async Task UpsertFactorsAsync(RaceKey key, Dictionary<int, FactorScores> scoresByUmaban)
+        /// <returns>反映したらtrue。対象の投稿がまだ無くて見送った場合はfalse。</returns>
+        public async Task<bool> UpsertFactorsAsync(RaceKey key, Dictionary<int, FactorScores> scoresByUmaban)
         {
             var existing = await FindPostByRaceKeyAsync(key.AsSlug());
-            var suffix = existing != null && existing.HasRaceResult ? "結果" : "出走表";
+
+            // 投稿が無い場合は「作らずに見送る」。ここで新規作成してしまうと、出走表(race_card)が
+            // 空のまま hrc_factors だけを持つ投稿ができてしまう。
+            // フロント側は馬名・馬番を race_card から組み立てているため、そういう投稿は
+            // レース選択欄には出るのに中身が空、という状態になる
+            // （実機で発生: 笠松の全10レースがこの状態になり、「出走馬名が表示されない」と
+            //  お客様からご指摘をいただいた。朝一バッチが出走表を作る前に score が走ると起きる）。
+            //
+            // 出走表を作るのは朝一バッチ(UpsertRaceCardAsync)の役目で、score はあくまで
+            // 既存のレース投稿に6ファクターを重ねるだけ、という責務分担にしておく。
+            // 見送ったレースは、朝一バッチが出走表を作った後に score を再実行すれば反映される
+            // （scoreは1日に複数回動かす前提のため、次の実行で自然に拾える）。
+            if (existing == null)
+            {
+                return false;
+            }
+
+            var suffix = existing.HasRaceResult ? "結果" : "出走表";
 
             var byUmaban = new Dictionary<string, object>();
             foreach (var kv in scoresByUmaban)
@@ -163,7 +181,8 @@ namespace KeibaDataCollector.WordPress
                     hrc_factors = JsonConvert.SerializeObject(byUmaban),
                 }
             };
-            await SendAsync(existing?.Id, payload);
+            await SendAsync(existing.Id, payload);
+            return true;
         }
 
         // レースキーごとに、最後に送信した内容を保持する。watchモードは確定するまで同じレースを

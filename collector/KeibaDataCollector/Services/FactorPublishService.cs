@@ -118,21 +118,35 @@ namespace KeibaDataCollector.Services
                 _source.Close();
             }
 
+            int published = 0, skipped = 0;
             foreach (var slug in entriesByRace.Keys)
             {
                 var scores = new Dictionary<int, FactorScores>();
                 foreach (var (umaban, input) in entriesByRace[slug])
                     scores[umaban] = _scoring.Compute(input);
 
-                _wp.UpsertFactorsAsync(raceKeys[slug], scores).GetAwaiter().GetResult();
+                var applied = _wp.UpsertFactorsAsync(raceKeys[slug], scores).GetAwaiter().GetResult();
+                if (!applied)
+                {
+                    // 出走表がまだWordPressに無いレース。ここで投稿を作ると馬名の無い
+                    // 空のレースができてしまうため送信しない（WordPressClient側のコメント参照）。
+                    skipped++;
+                    Console.WriteLine(
+                        $"[{_source.SourceName}] {slug} 出走表がWordPressにまだ無いため6ファクターの反映を見送りました" +
+                        "（朝一バッチで出走表が作られた後、次回のscore実行で反映されます）");
+                    continue;
+                }
 
+                published++;
                 var withAny = scores.Count(kv => HasAnyScore(kv.Value));
                 Console.WriteLine(
                     $"[{_source.SourceName}] {slug} 6ファクター反映完了: {scores.Count}頭中{withAny}頭に" +
                     "何らかのスコアあり（血統・調教等、母集団不足やデータ未取得のものはnullのまま）");
             }
 
-            Console.WriteLine($"[{_source.SourceName}] {targetDate:yyyy-MM-dd} 6ファクター算出 {entriesByRace.Count}レース 完了");
+            var skippedNote = skipped > 0 ? $"（うち{skipped}レースは出走表未作成のため見送り）" : "";
+            Console.WriteLine(
+                $"[{_source.SourceName}] {targetDate:yyyy-MM-dd} 6ファクター算出 {published}レース 完了{skippedNote}");
         }
 
         private static bool HasAnyScore(FactorScores s) =>
