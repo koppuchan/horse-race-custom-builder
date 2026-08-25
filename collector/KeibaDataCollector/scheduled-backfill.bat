@@ -59,6 +59,14 @@ if not defined JvLinkSoftwareId (
     exit /b 1
 )
 
+REM Launch a background watcher that auto-answers JV-Link's start-kit setup
+REM dialog if it appears. That dialog is invisible during this unattended run
+REM (Session 0 isolation) and would otherwise hang this task forever with
+REM nobody able to click it - see dismiss-startkit-dialog.ps1 for details.
+REM Runs detached (start /min) so it does not block this script; it exits on
+REM its own once it either answers the dialog or its timeout elapses.
+start "" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dismiss-startkit-dialog.ps1" -TimeoutSeconds 600 >> "%LOGFILE%" 2>&1
+
 REM Invoke the exe by its full path rather than relying on the current
 REM directory being searched: that search is disabled when the environment sets
 REM NoDefaultCurrentDirectoryInExePath=1, and a scheduled task does not
