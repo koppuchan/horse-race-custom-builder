@@ -118,14 +118,32 @@ namespace KeibaDataCollector.Services
                 _source.Close();
             }
 
-            int published = 0, skipped = 0;
+            int published = 0, skipped = 0, failed = 0;
             foreach (var slug in entriesByRace.Keys)
             {
                 var scores = new Dictionary<int, FactorScores>();
                 foreach (var (umaban, input) in entriesByRace[slug])
                     scores[umaban] = _scoring.Compute(input);
 
-                var applied = _wp.UpsertFactorsAsync(raceKeys[slug], scores).GetAwaiter().GetResult();
+                // 1レースの送信失敗で、残りのレースまで巻き添えにしない。
+                // 既存システムの朝一バッチはここで例外を上まで投げてしまい、WordPressが
+                // 503を1回返しただけで、その後の全レースの出走表が作られないまま
+                // 異常終了していた（笠松が丸ごと欠けた原因）。同じ壊れ方をしないよう、
+                // レース単位で捕まえて次へ進む。WordPressClient側でも再送はするので、
+                // ここまで来るのは再送しても駄目だった場合だけ。
+                bool applied;
+                try
+                {
+                    applied = _wp.UpsertFactorsAsync(raceKeys[slug], scores).GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    Console.WriteLine(
+                        $"[{_source.SourceName}] {slug} 6ファクターの反映に失敗（このレースのみスキップして続行）: {ex.Message}");
+                    continue;
+                }
+
                 if (!applied)
                 {
                     // 出走表がまだWordPressに無いレース。ここで投稿を作ると馬名の無い
@@ -144,9 +162,17 @@ namespace KeibaDataCollector.Services
                     "何らかのスコアあり（血統・調教等、母集団不足やデータ未取得のものはnullのまま）");
             }
 
-            var skippedNote = skipped > 0 ? $"（うち{skipped}レースは出走表未作成のため見送り）" : "";
+            var notes = new List<string>();
+            if (skipped > 0) notes.Add($"{skipped}レースは出走表未作成のため見送り");
+            if (failed > 0) notes.Add($"{failed}レースは送信失敗");
+            var note = notes.Count > 0 ? $"（{string.Join("、", notes)}）" : "";
             Console.WriteLine(
-                $"[{_source.SourceName}] {targetDate:yyyy-MM-dd} 6ファクター算出 {published}レース 完了{skippedNote}");
+                $"[{_source.SourceName}] {targetDate:yyyy-MM-dd} 6ファクター算出 {published}レース 完了{note}");
+
+            // 送信失敗があった日は、次回のscore実行で拾い直せるよう終了コードに残す。
+            if (failed > 0)
+                throw new InvalidOperationException(
+                    $"{failed}レースの反映に失敗しました（他のレースは反映済み）。次回のscore実行で再試行されます。");
         }
 
         private static bool HasAnyScore(FactorScores s) =>

@@ -278,19 +278,68 @@ namespace KeibaDataCollector.WordPress
             public int PredictionMarkCount { get; set; }
         }
 
+        // 一時的なサーバー側エラーで送信が失敗したときの再試行回数と間隔。
+        private const int SendMaxAttempts = 4;
+        private static readonly TimeSpan SendRetryDelay = TimeSpan.FromSeconds(10);
+
+        /// <summary>このHTTPステータスなら「サーバー側の一時的な不調」とみなして再送する。
+        ///
+        /// 実機で発生: 共有ホスティング(ConoHa WING)が混雑時に 503 Service Unavailable を返すことがあり、
+        /// 既存システムの朝一バッチがこれを1回踏んだだけで、その後の全レースの出走表が
+        /// 作られないまま異常終了していた（笠松が丸ごと欠けた原因。同日の別バッチでも503を確認）。
+        /// この手のエラーは数秒後に再送すれば通ることがほとんどなので、諦める前に粘る。
+        ///
+        /// 認証エラー(401/403)やバリデーションエラー(400)は再送しても結果が変わらないため対象外。</summary>
+        private static bool IsTransientHttpStatus(System.Net.HttpStatusCode status) =>
+            status == System.Net.HttpStatusCode.ServiceUnavailable      // 503
+            || status == System.Net.HttpStatusCode.BadGateway           // 502
+            || status == System.Net.HttpStatusCode.GatewayTimeout       // 504
+            || status == System.Net.HttpStatusCode.RequestTimeout       // 408
+            || (int)status == 429;                                      // Too Many Requests
+
         private async Task SendAsync(int? existingId, object payload)
         {
             var json = JsonConvert.SerializeObject(payload);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
 
             var path = existingId.HasValue
                 ? $"{_baseUrl}/wp-json/wp/v2/race/{existingId.Value}"
                 : $"{_baseUrl}/wp-json/wp/v2/race";
 
-            var response = await _http.PostAsync(path, content);
-            if (!response.IsSuccessStatusCode)
+            for (int attempt = 1; ; attempt++)
             {
+                // StringContentは送信のたびに作り直す（使い回すと2回目以降でストリームが
+                // 既に読み終わった状態になり、再送が必ず失敗する）。
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                HttpResponseMessage response;
+                try
+                {
+                    response = await _http.PostAsync(path, content);
+                }
+                catch (HttpRequestException ex) when (attempt < SendMaxAttempts)
+                {
+                    // 接続断など。これも一時的なことが多いので同様に再送する。
+                    Console.WriteLine(
+                        $"[WordPress] 送信に失敗（{attempt}/{SendMaxAttempts}回目、通信エラー）。" +
+                        $"{SendRetryDelay.TotalSeconds:0}秒後に再送します: {ex.Message}");
+                    await Task.Delay(SendRetryDelay);
+                    continue;
+                }
+
+                if (response.IsSuccessStatusCode) return;
+
                 var body = await response.Content.ReadAsStringAsync();
+
+                if (IsTransientHttpStatus(response.StatusCode) && attempt < SendMaxAttempts)
+                {
+                    Console.WriteLine(
+                        $"[WordPress] 送信に失敗（{attempt}/{SendMaxAttempts}回目、{(int)response.StatusCode} " +
+                        $"{response.StatusCode}）。サーバー側の一時的な不調とみなし、" +
+                        $"{SendRetryDelay.TotalSeconds:0}秒後に再送します。");
+                    await Task.Delay(SendRetryDelay);
+                    continue;
+                }
+
                 throw new InvalidOperationException($"WordPress API failed ({response.StatusCode}): {body}");
             }
         }
