@@ -24,7 +24,7 @@ namespace KeibaDataCollector
 
             try
             {
-                Run(mode, arg);
+                Run(mode, arg, args);
             }
             catch (Exception ex)
             {
@@ -42,8 +42,9 @@ namespace KeibaDataCollector
             return 0;
         }
 
-        private static void Run(string mode, string arg = null)
+        private static void Run(string mode, string arg = null, string[] args = null)
         {
+            args = args ?? new string[0];
             // WordPressClient はここでは作らない: setup モードはWordPressに一切繋がないため、
             // WordPressUser/WordPressAppPassword 未設定でも setup だけは実行できるようにする。
             using (var jvLink = new JvSpecComDataSource(AppConfig.JvLinkProgId, "JV", "JV-Link(中央競馬)"))
@@ -151,17 +152,31 @@ namespace KeibaDataCollector
 
                     case "backfill":
                     {
-                        // 6ファクター用の履歴一括取得。非常に時間がかかるため、必ず先に
-                        // 「probe」で対象データ種別が読めることを確認してから実行すること。
-                        // WordPressには書き込まない（ローカルSQLiteに蓄積するだけ）。
-                        // 第2引数でソースを絞れる: backfill jv / backfill uma / backfill（両方）。
-                        var targetJv = arg == null || arg == "jv";
-                        var targetUma = arg == null || arg == "uma";
+                        // 6ファクター用の履歴取得。WordPressには書き込まない
+                        // （ローカルSQLiteに蓄積するだけ）。
+                        //
+                        // 引数（順不同・省略可）:
+                        //   jv / uma      : 取得元を中央競馬のみ／地方競馬のみに絞る（既定は両方）
+                        //   incremental   : 差分のみ取得する（JVOpenのoption=Normal）。
+                        //                   ダイアログが出ないため、タスクスケジューラからの
+                        //                   無人実行はこちらを使うこと。省略時はSetup（全履歴）で、
+                        //                   スタートキット確認ダイアログに人が答える必要がある。
+                        var isIncremental = Array.IndexOf(args, "incremental") >= 0;
+                        var sourceArg = Array.Find(args, a => a == "jv" || a == "uma");
+                        var targetJv = sourceArg == null || sourceArg == "jv";
+                        var targetUma = sourceArg == null || sourceArg == "uma";
+
+                        var backfillOption = isIncremental ? DataOption.Normal : DataOption.Setup;
+                        Console.WriteLine(isIncremental
+                            ? "差分モード(option=Normal)で取得します。ダイアログは表示されません。"
+                            : "全履歴モード(option=Setup)で取得します。スタートキット確認ダイアログが"
+                              + "データ種別ごとに表示されるため、手動で応答してください"
+                              + "（無人実行する場合は引数に incremental を付けてください）。");
 
                         using (var store = new HistoricalDataStore(AppConfig.HistoricalDbPath))
                         {
-                            if (targetJv) RunBackfillFor(jvLink, store);
-                            if (targetUma) RunBackfillFor(umaConn, store);
+                            if (targetJv) RunBackfillFor(jvLink, store, backfillOption);
+                            if (targetUma) RunBackfillFor(umaConn, store, backfillOption);
                         }
                         break;
                     }
@@ -185,7 +200,11 @@ namespace KeibaDataCollector
                         Console.WriteLine("  watch    : レース確定を監視し、結果・払戻を随時WordPressへ反映する。");
                         Console.WriteLine("  probe    : 調査用。どのデータ種別で何が取得できるか確認する（WordPressへは書き込まない）。");
                         Console.WriteLine("            レースを指定する場合: probe 20260811-46-1R");
-                        Console.WriteLine("  backfill : 6ファクター用の過去データ一括取得（非常に時間がかかる。先にprobe推奨）。");
+                        Console.WriteLine("  backfill : 6ファクター用の過去データ取得（先にprobe推奨）。");
+                        Console.WriteLine("            引数なし: 全履歴(option=Setup)。非常に時間がかかり、JV-Linkが");
+                        Console.WriteLine("                      スタートキット確認ダイアログをデータ種別ごとに出すため手動実行専用。");
+                        Console.WriteLine("            incremental: 差分のみ(option=Normal)。ダイアログが出ないため無人実行可。");
+                        Console.WriteLine("                      定期実行（タスクスケジューラ）はこちらを使うこと。");
                         Console.WriteLine("            ソースを絞る場合: backfill jv （中央競馬のみ） / backfill uma （地方競馬のみ）");
                         Console.WriteLine("  dbstats  : backfillで蓄積したSQLiteの件数・日付範囲を確認する。");
                         break;
@@ -224,7 +243,8 @@ namespace KeibaDataCollector
         /// <summary>4種類のバックフィル（RACE/SLOP/WOOD/BLOD）を1ソース分まとめて実行する。
         /// それぞれ独立してtry/catchする: 例えば血統(BLOD)がこの契約では提供されていない場合でも、
         /// レース履歴(RACE)や調教データだけは取り込めるようにするため。</summary>
-        private static void RunBackfillFor(JvSpecComDataSource source, HistoricalDataStore store)
+        private static void RunBackfillFor(JvSpecComDataSource source, HistoricalDataStore store,
+            DataOption dataOption)
         {
             try
             {
@@ -236,7 +256,7 @@ namespace KeibaDataCollector
                 return;
             }
 
-            var backfill = new BackfillService(source, store);
+            var backfill = new BackfillService(source, store, dataOption);
 
             RunOneBackfillStep(source.SourceName, "RACE(レース履歴)", backfill.BackfillRaceEntries);
             RunOneBackfillStep(source.SourceName, "SLOP(坂路調教)", backfill.BackfillSlopeTraining);

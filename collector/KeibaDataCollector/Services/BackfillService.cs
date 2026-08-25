@@ -8,9 +8,14 @@ using static KeibaDataCollector.Interop.JvDataSdk.JVData_Struct;
 namespace KeibaDataCollector.Services
 {
     /// <summary>
-    /// 6ファクター算出のための過去データを一括取得し、ローカルSQLite（HistoricalDataStore）へ
-    /// 蓄積する。DataOption.Setup（全履歴）でJVOpenするため、初回は非常に時間がかかる
-    /// （中央+地方で数年分、件数は数十万〜数百万レコード規模になりうる）。
+    /// 6ファクター算出のための過去データを取得し、ローカルSQLite（HistoricalDataStore）へ
+    /// 蓄積する。
+    ///
+    /// 用途に応じて2つのモードがある（コンストラクタのdataOption引数、詳細は_dataOptionのコメント）:
+    ///   - Setup(3):  初回の全履歴取り込み。非常に時間がかかり、かつJV-Linkが
+    ///                スタートキットの有無を尋ねるダイアログを出すため、手動実行専用。
+    ///   - Normal(1): 差分取り込み。ダイアログが出ないので無人（タスクスケジューラ）実行できる。
+    ///                定期実行はこちらを使う。
     ///
     /// 実行前に必ず"probe"コマンド（DataSpecProbeService）で、対象データ種別
     /// （RACE/SLOP/WOOD/BLOD/BLDN）が実際に読めるかを軽い範囲で確認してから流すこと。
@@ -21,6 +26,23 @@ namespace KeibaDataCollector.Services
     {
         private readonly IRaceDataSource _source;
         private readonly HistoricalDataStore _store;
+
+        // JVOpenのoption。呼び出し側が用途に応じて選ぶ:
+        //
+        //   DataOption.Setup(3)  = 初回の全履歴取り込み。JV-Link的には「セットアップを実行する」
+        //                          という意味なので、dataspecごとに「スタートキット(CD/DVD-ROM)を
+        //                          持っているか」を尋ねる独自ダイアログが毎回表示される。
+        //                          これは1度答えれば済む類のものではなく、Setupで開くたびに出る
+        //                          （実機で確認: RACE→SLOP→WOODと種別が変わるたびに再表示された）。
+        //                          そのため人が張り付いて答えられる手動実行専用。
+        //
+        //   DataOption.Normal(1) = 差分取得。ダイアログは一切出ないため無人実行できる。
+        //                          実機確認では直近およそ1年分を返す（README参照）。定期実行は
+        //                          前回からの数日〜1週間分を追いつければ十分なので、これで足りる。
+        //
+        // つまり「初回だけ手動でSetup、以降の定期実行はNormal」という運用が正しく、
+        // 定期実行までSetupにしてしまうと、誰も押せないダイアログで永久に固まる。
+        private readonly DataOption _dataOption;
 
         // お客様の要望（過去3年分あれば十分）に合わせて絞り込む。
         // 実機確認では option=Normal(1) は直近1年、option=Setup(3) は
@@ -38,10 +60,13 @@ namespace KeibaDataCollector.Services
         // 1件ずつコミットすると数百万件規模でfsyncがボトルネックになり現実的な時間で終わらない。
         private const int BatchSize = 5000;
 
-        public BackfillService(IRaceDataSource source, HistoricalDataStore store)
+        /// <param name="dataOption">上の_dataOptionのコメント参照。省略時はSetup(全履歴・手動実行用)。</param>
+        public BackfillService(IRaceDataSource source, HistoricalDataStore store,
+            DataOption dataOption = DataOption.Setup)
         {
             _source = source;
             _store = store;
+            _dataOption = dataOption;
         }
 
         /// <summary>レース系（RA/SE/HR）の過去データを取り込む。
@@ -54,7 +79,7 @@ namespace KeibaDataCollector.Services
         /// 件数を最後にログへ出す（無言で欠落させない）。</summary>
         public void BackfillRaceEntries()
         {
-            var open = _source.Open("RACE", BackfillFromTime, DataOption.Setup);
+            var open = _source.Open("RACE", BackfillFromTime, _dataOption);
             if (open.ReturnCode == -1)
             {
                 _source.Close();
@@ -240,7 +265,9 @@ namespace KeibaDataCollector.Services
             // 実機確認: DataOption.Normal(1)は「有効なoption」ではあるものの、
             // 実際には直近およそ1年分しか返さなかった（日付範囲ログで確認）。
             // 全履歴（SLOPは2003年以降、WOODは2021年以降）を取るにはSetup(3)が必要。
-            var open = _source.Open(dataSpec, BackfillFromTime, DataOption.Setup);
+            // ただしSetupはダイアログが出て無人実行できないため、定期実行ではNormalを使う
+            // （_dataOptionのコメント参照）。
+            var open = _source.Open(dataSpec, BackfillFromTime, _dataOption);
             if (open.ReturnCode == -1)
             {
                 _source.Close();
@@ -337,8 +364,8 @@ namespace KeibaDataCollector.Services
 
         private void BackfillPedigreeSpec(string dataSpec, string fromTime, bool isLegacyFormat)
         {
-            // BackfillTrainingと同じ理由でSetup(3)を使う。
-            var open = _source.Open(dataSpec, fromTime, DataOption.Setup);
+            // BackfillTrainingと同じ扱い（_dataOptionのコメント参照）。
+            var open = _source.Open(dataSpec, fromTime, _dataOption);
             if (open.ReturnCode == -1)
             {
                 _source.Close();

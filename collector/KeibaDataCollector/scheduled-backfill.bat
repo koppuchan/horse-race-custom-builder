@@ -1,22 +1,37 @@
 @echo off
 chcp 65001 >nul
 REM ============================================================================
-REM Task Scheduler entry point for the historical backfill (weekly).
+REM Task Scheduler entry point for the incremental historical refresh (weekly).
 REM
-REM Refills the local SQLite (data\historical.sqlite3) that the 6 factors are
-REM computed from. BackfillFromTime is always "3 years ago from today", so
-REM re-running this periodically keeps that rolling window current. This is a
-REM long-running batch (can take hours - see run-backfill.bat) so schedule it
-REM for a quiet time of day/week, and avoid overlapping with scheduled-score.bat
-REM runs (a scoring run that lands mid-backfill may hit a locked database and
-REM fail for that one run, but the next scheduled-score.bat run a few hours
-REM later will succeed normally once backfill has finished).
+REM Tops up the local SQLite (data\historical.sqlite3) that the 6 factors are
+REM computed from, with whatever is new since the last run.
 REM
-REM Optional argument, same as run-backfill.bat: jv (central racing only) /
-REM uma (local racing only). Default (no argument): both. Set this via the
-REM "Add arguments" field of the Task Scheduler action if you want to split
-REM central and local racing into separate schedules instead of running both
-REM together.
+REM IMPORTANT - this runs "backfill incremental" (JVOpen option=Normal), NOT the
+REM full-history backfill (option=Setup) that run-backfill.bat does by default:
+REM
+REM   Setup mode means "perform a setup" to JV-Link, so it pops up its own
+REM   native dialog asking whether you have a start-kit CD/DVD-ROM. That is not
+REM   a one-time prompt - it reappears for every dataspec (RACE, then SLOP, then
+REM   WOOD, ...), and it was confirmed on this VPS that an unattended run simply
+REM   blocks forever on it. It cannot be reliably clicked by automation either.
+REM   So Setup mode is strictly for manual, attended runs.
+REM
+REM   Normal mode never shows that dialog, and returns roughly the last year of
+REM   data (see README), which is far more than a weekly refresh needs. That
+REM   makes it the right mode for unattended scheduling.
+REM
+REM The one-time full history load is therefore a manual step: run
+REM run-backfill.bat once by hand and answer the dialogs. After that, this
+REM weekly incremental task keeps the data current with no interaction.
+REM
+REM Avoid overlapping with scheduled-score.bat runs (a scoring run that lands
+REM mid-refresh may hit a locked database and fail for that one run, but the
+REM next scheduled-score.bat run a few hours later will succeed normally).
+REM
+REM Optional argument: jv (central racing only) / uma (local racing only).
+REM Default (no argument): both. Set this via the "Add arguments" field of the
+REM Task Scheduler action if you want to split central and local racing into
+REM separate schedules instead of running both together.
 REM
 REM Differences from run-backfill.bat, which is for interactive use:
 REM   - No "pause" at the end. A scheduled task that waits for a key press
@@ -59,24 +74,6 @@ if not defined JvLinkSoftwareId (
     exit /b 1
 )
 
-REM Launch a background watcher that auto-answers JV-Link's start-kit setup
-REM dialog if it appears - see dismiss-startkit-dialog.ps1 for details on why
-REM this exists (this task must run in an interactive logged-on session, not
-REM "regardless of logon", for the watcher to actually be able to see it) and
-REM why it now loops for the whole run instead of exiting after one dialog
-REM (confirmed on the VPS: the dialog can reappear per dataspec - RACE, SLOP,
-REM WOOD, ... - not just once). Runs detached (start /min) so it does not
-REM block this script; it is explicitly stopped below once backfill finishes,
-REM its own long timeout is only a safety net in case that stop step is
-REM somehow skipped (e.g. this script itself gets killed).
-REM
-REM Deliberately NOT using "start ... >> file" here: attaching redirection
-REM directly to a start command is a known cmd.exe gotcha that can make start
-REM wait for the whole child process instead of truly detaching (confirmed on
-REM this project's actual VPS - the batch never even reached the exe launch
-REM below). The watcher writes its own log via -LogFile instead.
-start "" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dismiss-startkit-dialog.ps1" -LogFile "%~dp0%LOGFILE%"
-
 REM Invoke the exe by its full path rather than relying on the current
 REM directory being searched: that search is disabled when the environment sets
 REM NoDefaultCurrentDirectoryInExePath=1, and a scheduled task does not
@@ -91,15 +88,10 @@ if not exist "%EXE%" (
 REM Keep the working directory next to the exe; some COM components resolve
 REM their own relative paths against it.
 pushd "%~dp0bin\Debug\net48"
-"%EXE%" backfill %1 >> "%~dp0%LOGFILE%" 2>&1
+REM "incremental" is what keeps this unattended-safe - see the header comment.
+"%EXE%" backfill incremental %1 >> "%~dp0%LOGFILE%" 2>&1
 set EXITCODE=%ERRORLEVEL%
 popd
-
-REM Backfill itself is done, so the watcher has nothing left to guard - stop
-REM it now instead of leaving it running for the rest of its safety-net
-REM timeout. Matched by command line content (not just process name) so this
-REM cannot accidentally kill an unrelated powershell.exe on the machine.
-powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*dismiss-startkit-dialog.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >> "%LOGFILE%" 2>&1
 
 echo [%DATE% %TIME%] backfill batch end (exit=%EXITCODE%) >> "%LOGFILE%"
 exit /b %EXITCODE%
