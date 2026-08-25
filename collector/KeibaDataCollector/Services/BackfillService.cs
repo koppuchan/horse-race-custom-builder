@@ -69,6 +69,11 @@ namespace KeibaDataCollector.Services
             _dataOption = dataOption;
         }
 
+        /// <summary>ログ用のモード表記。差分実行なのに「全履歴取得」と出ていると、
+        /// 後からログを読んだときに取得範囲を誤解するため、実際のoptionに合わせる。</summary>
+        private string ModeLabel =>
+            _dataOption == DataOption.Setup ? "全履歴取得" : "差分取得";
+
         /// <summary>レース系（RA/SE/HR）の過去データを取り込む。
         /// RAレコードでレースごとの距離・トラック種別を先に押さえ、直後に続くSEレコードに
         /// 反映する想定（JV-Dataは通常レース単位でRA→SE→HRの順に流れる）。
@@ -92,7 +97,7 @@ namespace KeibaDataCollector.Services
                 throw new InvalidOperationException($"{_source.SourceName} RACE Open failed: {open.ReturnCode}");
             }
 
-            Console.WriteLine($"[{_source.SourceName}] RACE 全履歴取得を開始します（ダウンロード対象 {open.DownloadCount}ファイル）。");
+            Console.WriteLine($"[{_source.SourceName}] RACE {ModeLabel}を開始します（ダウンロード対象 {open.DownloadCount}ファイル）。");
 
             // レースキー(日付+場コード+R番号)ごとの距離・トラック種別・最も早いコーナーの通過順位
             // （先頭からの馬番配列。②テン速度・展開用）。RA到着時に埋め、SE処理時に参照する。
@@ -281,7 +286,7 @@ namespace KeibaDataCollector.Services
                 return;
             }
 
-            Console.WriteLine($"[{_source.SourceName}] {dataSpec} 全履歴取得を開始します。");
+            Console.WriteLine($"[{_source.SourceName}] {dataSpec} {ModeLabel}を開始します。");
 
             int totalRecords = 0, matched = 0;
             DateTime? minDate = null, maxDate = null;
@@ -379,7 +384,7 @@ namespace KeibaDataCollector.Services
                 return;
             }
 
-            Console.WriteLine($"[{_source.SourceName}] {dataSpec} 全履歴取得を開始します（{(isLegacyFormat ? "旧8バイト形式" : "新10バイト形式")}）。");
+            Console.WriteLine($"[{_source.SourceName}] {dataSpec} {ModeLabel}を開始します（{(isLegacyFormat ? "旧8バイト形式" : "新10バイト形式")}）。");
 
             int totalRecords = 0, skCount = 0, hnCount = 0;
             int? minBirthYear = null, maxBirthYear = null;
