@@ -38,16 +38,80 @@ namespace KeibaDataCollector.Interop
             SourceName = sourceName;
         }
 
+        // JVInit/NVInitがシェル通知アイコン(タスクトレイ)のタイムアウトで落ちたときの再試行回数と間隔。
+        // 詳細はInitializeのコメント参照。
+        private const int InitMaxAttempts = 4;
+        private static readonly TimeSpan InitRetryDelay = TimeSpan.FromSeconds(15);
+
+        /// <summary>
+        /// JVInit/NVInitを呼ぶ。COM例外で失敗した場合は間隔を空けて数回まで再試行する。
+        ///
+        /// 再試行が必要な理由（実機で発生し、Web上の技術情報で裏付けを取った内容）:
+        /// JV-Link/UmaConnのInitは内部でタスクトレイのアイコンを操作しており、Windowsの
+        /// Shell_NotifyIcon APIを呼んでいる。このAPIはシェル(explorer)のトレイウィンドウへ
+        /// SendMessageTimeout でメッセージを送る実装になっていて、タイムアウトは4秒
+        /// （Windows Vista以降のバージョンでは7秒）と短い。CPUやディスクが混んでいて
+        /// シェルが時間内に応答できないと、APIはFALSE（GetLastError=1460 ERROR_TIMEOUT）を返し、
+        /// UmaConn側はこれを「シェル通知アイコンが削除できません」というCOMエラーとして投げてくる。
+        ///
+        /// 実機の症状もこれと一致していた:
+        ///   - JV-Link側で数十万件をダウンロード・パースした直後にUmaConnをInitすると失敗する
+        ///     （マシンが最も忙しいタイミング）
+        ///   - JV-Link側が即座に失敗して何もダウンロードしなかった回は、続くUmaConnのInitは成功した
+        ///   - VPS再起動直後（OS自体がまだ忙しい）も失敗した
+        ///
+        /// このタイムアウトは一時的な状態なので、Microsoftのドキュメント/解説でも
+        /// 「しばらく待って再試行する」のが推奨される対処とされている。恒久的な失敗
+        /// （ソフトウェアID不正など、Initが負の戻り値を返すケース）は再試行しても無意味なため
+        /// 区別し、そちらは即座に例外にする。
+        /// </summary>
         public void Initialize(string softwareId)
         {
             EnsureComObject();
 
-            // JVInit/NVInit(string sid) -- sidはJRA-VANソフトウェアID相当。
-            int rc = (int)Invoke("Init", softwareId);
-            if (rc < 0)
-                throw new InvalidOperationException($"{SourceName} {_methodPrefix}Init failed: {rc}");
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    // JVInit/NVInit(string sid) -- sidはJRA-VANソフトウェアID相当。
+                    int rc = (int)Invoke("Init", softwareId);
+                    if (rc < 0)
+                    {
+                        // APIとしては呼べたが業務的に失敗（IDが違う等）。再試行しても直らない。
+                        throw new InvalidOperationException($"{SourceName} {_methodPrefix}Init failed: {rc}");
+                    }
+                    break;
+                }
+                catch (Exception ex) when (IsTransientComFailure(ex) && attempt < InitMaxAttempts)
+                {
+                    Console.WriteLine(
+                        $"[{SourceName}] {_methodPrefix}Init がCOMエラーで失敗（{attempt}/{InitMaxAttempts}回目）。" +
+                        $"シェル通知アイコンのタイムアウトなど一時的な要因の可能性が高いため、" +
+                        $"{InitRetryDelay.TotalSeconds:0}秒後に再試行します: {InnermostMessage(ex)}");
+                    System.Threading.Thread.Sleep(InitRetryDelay);
+                }
+            }
 
             SuppressPayoutDialog();
+        }
+
+        /// <summary>後期バインド(InvokeMember)経由のCOM例外はTargetInvocationExceptionに包まれて
+        /// 飛んでくるため、内側を辿ってCOMExceptionかどうかを判定する。
+        /// InvalidOperationException（上でrc&lt;0のときに自分で投げるもの）は再試行対象にしない。</summary>
+        private static bool IsTransientComFailure(Exception ex)
+        {
+            for (var e = ex; e != null; e = e.InnerException)
+            {
+                if (e is COMException) return true;
+            }
+            return false;
+        }
+
+        private static string InnermostMessage(Exception ex)
+        {
+            var e = ex;
+            while (e.InnerException != null) e = e.InnerException;
+            return e.Message;
         }
 
         /// <summary>
