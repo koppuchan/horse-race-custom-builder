@@ -126,15 +126,47 @@ namespace KeibaDataCollector.Services
                 $"対象日({targetDate:yyyy-MM-dd})以外の日付={string.Join(",", otherDates)}, " +
                 $"種別内訳=[{typeBreakdown}]");
 
+            int published = 0, failed = 0;
             foreach (var slug in entriesByRace.Keys)
             {
                 var entries = entriesByRace[slug];
                 entries.Sort((a, b) => a.Umaban.CompareTo(b.Umaban));
-                _wp.UpsertRaceCardAsync(raceKeys[slug], entries).GetAwaiter().GetResult();
+
+                // 1レースの送信失敗で、残りのレースまで巻き添えにしない
+                // （PredictionServiceが以前から採っている方針に揃える）。
+                //
+                // 対策前は例外がそのまま上まで飛んでいたため、WordPressが1回でも
+                // 503を返すと、そこから後ろのレースの出走表が一切作られないまま
+                // バッチが異常終了していた。実際に発生し、船橋10R以降と笠松の
+                // 全10レースの出走表が丸ごと欠けた（カスタムビルダー側では
+                // 「馬名が表示されない」という形で表面化した）。
+                // WordPressClient側でも一時的なエラーは再送するので、ここまで
+                // 来るのは再送しても駄目だった場合だけ。
+                try
+                {
+                    _wp.UpsertRaceCardAsync(raceKeys[slug], entries).GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    Console.WriteLine(
+                        $"[{_source.SourceName}] {slug} 出走表の反映に失敗（このレースのみスキップして続行）: {ex.Message}");
+                    continue;
+                }
+
+                published++;
                 Console.WriteLine($"[{_source.SourceName}] {slug} 出走表 {entries.Count}頭 反映完了");
             }
 
-            Console.WriteLine($"[{_source.SourceName}] {targetDate:yyyy-MM-dd} 出走表 {entriesByRace.Count}レース 反映完了");
+            var failedNote = failed > 0 ? $"（{failed}レースは送信失敗）" : "";
+            Console.WriteLine(
+                $"[{_source.SourceName}] {targetDate:yyyy-MM-dd} 出走表 {published}レース 反映完了{failedNote}");
+
+            // 失敗があった場合は終了コードに残す（成功扱いで見逃すと、
+            // 出走表が欠けたまま誰も気づかないため）。
+            if (failed > 0)
+                throw new InvalidOperationException(
+                    $"{failed}レースの出走表反映に失敗しました（他のレースは反映済み）。");
         }
     }
 }
