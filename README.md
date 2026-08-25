@@ -126,6 +126,19 @@ Web上の公開情報でも確認できなかった。これ以上の切り分�
   セットアップダイアログが出たら「スタートキットを持っていない」を選ぶこと
 - **option=Setupのバックフィルは無人実行できない**（上記ダイアログのため）。定期実行は
   `backfill incremental`（option=Normal）を使うこと。詳細は下記「2. バックフィル実行」参照
+- **`Read failed: -402` が出たらJV-Linkのキャッシュを消す**: JRA-VAN公式FAQによると
+  `-402`は「ダウンロードしたファイルが異常（ファイルサイズ=0）」の意味。ダウンロード中に
+  プロセスを強制終了した場合などに、壊れた／0バイトのファイルがキャッシュに残り、以降
+  そのdataspecを読むたびに再発する。`C:\ProgramData\JRA-VAN\Data Lab` 配下の
+  `data` フォルダと `cache` フォルダの中身を手動で削除してから再実行すれば解消する。
+  （参考: https://support.jra-van.jp/jravan/detail?site=SVKNEGBV&category=2&id=33 ）
+- **`シェル通知アイコンが削除できません` というCOMエラーでInitが失敗する場合**:
+  JV-Link/UmaConnのInitはタスクトレイのアイコンを操作しており、Windowsの
+  `Shell_NotifyIcon` API（シェルへの送信タイムアウトが4〜7秒）を内部で呼んでいる。
+  CPU/ディスクが混んでいてシェルが時間内に応答できないとタイムアウトし
+  （`GetLastError=1460 ERROR_TIMEOUT`）、このエラーになる。一時的な事象のため、
+  `JvSpecComDataSource.Initialize` 側で待機付きの再試行を実装済み（最大4回・15秒間隔）。
+  ログに「再試行します」と出た後で成功していれば正常動作。
 
 ## VPSでの作業手順
 
