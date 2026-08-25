@@ -62,16 +62,20 @@ if not defined JvLinkSoftwareId (
 REM Launch a background watcher that auto-answers JV-Link's start-kit setup
 REM dialog if it appears - see dismiss-startkit-dialog.ps1 for details on why
 REM this exists (this task must run in an interactive logged-on session, not
-REM "regardless of logon", for the watcher to actually be able to see it).
-REM Runs detached (start /min) so it does not block this script; it exits on
-REM its own once it either answers the dialog or its timeout elapses.
+REM "regardless of logon", for the watcher to actually be able to see it) and
+REM why it now loops for the whole run instead of exiting after one dialog
+REM (confirmed on the VPS: the dialog can reappear per dataspec - RACE, SLOP,
+REM WOOD, ... - not just once). Runs detached (start /min) so it does not
+REM block this script; it is explicitly stopped below once backfill finishes,
+REM its own long timeout is only a safety net in case that stop step is
+REM somehow skipped (e.g. this script itself gets killed).
 REM
 REM Deliberately NOT using "start ... >> file" here: attaching redirection
 REM directly to a start command is a known cmd.exe gotcha that can make start
 REM wait for the whole child process instead of truly detaching (confirmed on
 REM this project's actual VPS - the batch never even reached the exe launch
 REM below). The watcher writes its own log via -LogFile instead.
-start "" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dismiss-startkit-dialog.ps1" -TimeoutSeconds 600 -LogFile "%~dp0%LOGFILE%"
+start "" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dismiss-startkit-dialog.ps1" -LogFile "%~dp0%LOGFILE%"
 
 REM Invoke the exe by its full path rather than relying on the current
 REM directory being searched: that search is disabled when the environment sets
@@ -90,6 +94,12 @@ pushd "%~dp0bin\Debug\net48"
 "%EXE%" backfill %1 >> "%~dp0%LOGFILE%" 2>&1
 set EXITCODE=%ERRORLEVEL%
 popd
+
+REM Backfill itself is done, so the watcher has nothing left to guard - stop
+REM it now instead of leaving it running for the rest of its safety-net
+REM timeout. Matched by command line content (not just process name) so this
+REM cannot accidentally kill an unrelated powershell.exe on the machine.
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*dismiss-startkit-dialog.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >> "%LOGFILE%" 2>&1
 
 echo [%DATE% %TIME%] backfill batch end (exit=%EXITCODE%) >> "%LOGFILE%"
 exit /b %EXITCODE%

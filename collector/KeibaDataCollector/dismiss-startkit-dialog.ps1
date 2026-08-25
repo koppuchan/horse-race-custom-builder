@@ -1,6 +1,6 @@
 # dismiss-startkit-dialog.ps1
 #
-# Watches for JV-Link's one-time setup dialog (Setup / Setup kit prompt) and
+# Watches for JV-Link's setup dialog (Setup / Setup kit prompt) and
 # automatically selects "does not have a start kit" then clicks OK, so that an
 # unattended (Task Scheduler) backfill run does not hang forever.
 #
@@ -9,6 +9,13 @@
 # start kits were discontinued in March 2022, so the correct answer is always
 # "does not have one" (second radio button), which makes JV-Link download the
 # full structure itself instead of waiting for a disc.
+#
+# Confirmed on this project's actual VPS: this dialog is not a one-time-ever
+# prompt - it can appear separately for each dataspec the backfill opens with
+# Setup mode (RACE, then SLOP, then WOOD, ...), each apparently needing its own
+# structure downloaded and its own prompt answered. So this script loops for
+# its entire timeout window instead of exiting after the first dialog it
+# handles, to cover the whole backfill run rather than just its first minute.
 #
 # A Task Scheduler run configured to "run whether user is logged on or not"
 # executes in a non-interactive session (Session 0), where this dialog would
@@ -27,7 +34,11 @@
 # Windows PowerShell 5.1 setups depending on how the file is saved.
 
 param(
-    [int]$TimeoutSeconds = 600,
+    # Must cover the whole backfill run, not just its first minute or so - see
+    # the note above about the dialog reappearing per dataspec. scheduled-
+    # backfill.bat also explicitly stops this script once backfill itself
+    # finishes, so this is a safety-net ceiling more than an expected runtime.
+    [int]$TimeoutSeconds = 21600,
     [string]$LogFile = ""
 )
 
@@ -58,6 +69,7 @@ Write-Log "dismiss-startkit-dialog watcher started (timeout=${TimeoutSeconds}s)"
 
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $root = [System.Windows.Automation.AutomationElement]::RootElement
+$dismissCount = 0
 
 while ((Get-Date) -lt $deadline) {
     $titleCondition = New-Object System.Windows.Automation.PropertyCondition(
@@ -90,11 +102,10 @@ while ((Get-Date) -lt $deadline) {
             if ($okButton -ne $null) {
                 $invokePattern = $okButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
                 $invokePattern.Invoke()
-                Write-Log "Dismissed setup dialog: selected no-start-kit option and clicked OK."
-                exit 0
+                $dismissCount++
+                Write-Log "Dismissed setup dialog #${dismissCount}: selected no-start-kit option and clicked OK. Continuing to watch (may reappear for the next dataspec)."
             } else {
-                Write-Log "Found setup dialog and radio button but could not find OK button."
-                exit 1
+                Write-Log "Found setup dialog and radio button but could not find OK button. Will retry on the next poll."
             }
         }
     }
@@ -102,5 +113,5 @@ while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 2
 }
 
-Write-Log "No setup dialog appeared within timeout; nothing to do."
+Write-Log "Timeout reached (dismissed ${dismissCount} dialog(s) total); stopping watcher."
 exit 0
