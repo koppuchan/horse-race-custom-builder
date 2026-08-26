@@ -225,27 +225,73 @@ namespace KeibaDataCollector.WordPress
             return true;
         }
 
-        /// <summary>race_key が一致する既存投稿を探す。無ければ null。</summary>
+        /// <summary>race_key が一致する既存投稿を探す。無ければ null。
+        ///
+        /// 一時的なサーバーエラー(503等)はSendAsyncと同様に再送する。
+        ///
+        /// 以前はここで503等を踏むと「投稿が見つからない」として扱っていた。呼び出し元の
+        /// UpsertRaceCardAsync/UpsertFactorsAsyncはnullを「新規作成してよい」と解釈するため、
+        /// 既存の投稿があるのに気づけず、同じrace_keyの投稿を新規に作ってしまっていた
+        /// （実機で発生: 笠松7R・金沢10Rが再取得実行時にこれで重複投稿になった。片方に
+        /// 出走表、もう片方に結果・6ファクターが入った状態で分裂した）。
+        /// SendAsyncのリトライを入れた時点でこちらへの適用が漏れていたのが原因のため、
+        /// 同じ再送方針をここにも適用する。</summary>
         private async Task<ExistingRacePost> FindPostByRaceKeyAsync(string raceKeySlug)
         {
             // race_key をmeta_queryで検索できるようWordPress側にカスタムRESTフィルタを用意している
             // （src/wordpress-plugin/keiba-race-sync の rest_race_query フィルタ）。
-            var response = await _http.GetAsync($"{_baseUrl}/wp-json/wp/v2/race?meta_key=race_key&meta_value={raceKeySlug}");
-            if (!response.IsSuccessStatusCode) return null;
+            var url = $"{_baseUrl}/wp-json/wp/v2/race?meta_key=race_key&meta_value={raceKeySlug}";
 
-            var body = await response.Content.ReadAsStringAsync();
-            var posts = JsonConvert.DeserializeObject<WpPost[]>(body);
-            if (posts == null || posts.Length == 0) return null;
-
-            var post = posts[0];
-
-            return new ExistingRacePost
+            for (int attempt = 1; ; attempt++)
             {
-                Id = post.Id,
-                // メタは未設定だと "" や "[]"、"{}" になりうるため、中身があるかどうかで判定する。
-                HasRaceResult = HasContent(post.Meta?.RaceResult),
-                PredictionMarkCount = CountPredictionMarks(post.Meta?.Predictions),
-            };
+                HttpResponseMessage response;
+                try
+                {
+                    response = await _http.GetAsync(url);
+                }
+                catch (HttpRequestException ex) when (attempt < SendMaxAttempts)
+                {
+                    Console.WriteLine(
+                        $"[WordPress] {raceKeySlug} の既存投稿検索に失敗（{attempt}/{SendMaxAttempts}回目、通信エラー）。" +
+                        $"{SendRetryDelay.TotalSeconds:0}秒後に再試行します: {ex.Message}");
+                    await Task.Delay(SendRetryDelay);
+                    continue;
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    if (IsTransientHttpStatus(response.StatusCode) && attempt < SendMaxAttempts)
+                    {
+                        Console.WriteLine(
+                            $"[WordPress] {raceKeySlug} の既存投稿検索に失敗（{attempt}/{SendMaxAttempts}回目、" +
+                            $"{(int)response.StatusCode} {response.StatusCode}）。" +
+                            $"{SendRetryDelay.TotalSeconds:0}秒後に再試行します。");
+                        await Task.Delay(SendRetryDelay);
+                        continue;
+                    }
+
+                    // 再送しても駄目だった、または再送対象外のエラー。ここで「無い」扱い(null)に
+                    // してしまうと重複投稿の原因になるため、検索できなかったことを例外で伝える。
+                    // 呼び出し元（Upsert系）はこれを送信失敗と同様に扱い、そのレースをスキップする。
+                    var body = await response.Content.ReadAsStringAsync();
+                    throw new InvalidOperationException(
+                        $"WordPress race_key 検索に失敗 ({response.StatusCode}): {body}");
+                }
+
+                var okBody = await response.Content.ReadAsStringAsync();
+                var posts = JsonConvert.DeserializeObject<WpPost[]>(okBody);
+                if (posts == null || posts.Length == 0) return null;
+
+                var post = posts[0];
+
+                return new ExistingRacePost
+                {
+                    Id = post.Id,
+                    // メタは未設定だと "" や "[]"、"{}" になりうるため、中身があるかどうかで判定する。
+                    HasRaceResult = HasContent(post.Meta?.RaceResult),
+                    PredictionMarkCount = CountPredictionMarks(post.Meta?.Predictions),
+                };
+            }
         }
 
         private static bool HasContent(string metaValue)
