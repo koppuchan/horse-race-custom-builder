@@ -121,6 +121,8 @@
             btn.classList.add('is-active');
 
             var raceKey = btn.dataset.raceKey;
+            var isMobile = window.matchMedia && window.matchMedia('(max-width: 767px)').matches;
+
             fetch(hrcConfig.restBase + '/race-data?race_key=' + encodeURIComponent(raceKey))
                 .then(function (res) {
                     if (res.status === 403) {
@@ -134,6 +136,12 @@
                 })
                 .then(function (data) {
                     if (!data) {
+                        // ロック中のレース。無料レースと同じく、タップ後に案内エリア
+                        // （ロック解除の案内）まで自動でスクロールする
+                        // （クライアント要望：ロック中でも手動スクロールの一手間を無くすため）。
+                        if (isMobile) {
+                            lockedNotice.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
                         return;
                     }
                     currentHorses = data.horses;
@@ -146,7 +154,7 @@
                     // 一手間を無くすため）。デスクトップは既にSTEP2が視界に収まっている
                     // ことが多く、強制スクロールするとかえって不自然なジャンプになるため、
                     // スマホ相当の狭い画面幅に限定する。
-                    if (window.matchMedia && window.matchMedia('(max-width: 767px)').matches) {
+                    if (isMobile) {
                         step2.scrollIntoView({ behavior: 'smooth', block: 'start' });
                     }
                 });
@@ -172,23 +180,35 @@
     // 使えないため、ログイン直後の1回だけこちらで案内を出す。
     (function initAddFriendBanner() {
         var params = new URLSearchParams(window.location.search);
-        if (params.get('hrc_unlocked') !== '1' || !hrcConfig.addFriendUrl) {
+        if (params.get('hrc_unlocked') !== '1') {
             return;
         }
 
-        var banner = root.querySelector('#hrc-add-friend-banner');
-        var link = root.querySelector('#hrc-add-friend-link');
-        var dismiss = root.querySelector('#hrc-add-friend-dismiss');
-        if (banner && link) {
-            link.href = hrcConfig.addFriendUrl;
-            banner.hidden = false;
-            if (dismiss) {
-                dismiss.addEventListener('click', function () {
-                    banner.hidden = true;
-                });
+        // hrc_unlocked=1 は、サーバーがCookie発行を試みた直後に一度だけ付けるURLパラメータ。
+        // ただしCookie自体はHttpOnlyで発行されるためJSからは中身を確認できず、パラメータの
+        // 有無だけを信用すると「実際はCookieが保存されなかった（プライベートブラウジングや
+        // 以前のURLの再訪問など）のに、このバナーだけ表示されてしまう」不整合が起こりうる
+        // （お客様報告で確認済み: ロックされたままの画面に「ログインありがとうございます」
+        // が出ていた）。
+        // hrcConfig.isUnlocked はPHP側でCookieの署名を実際に検証した結果なので、
+        // これも真の場合のみバナーを出す。
+        if (hrcConfig.isUnlocked && hrcConfig.addFriendUrl) {
+            var banner = root.querySelector('#hrc-add-friend-banner');
+            var link = root.querySelector('#hrc-add-friend-link');
+            var dismiss = root.querySelector('#hrc-add-friend-dismiss');
+            if (banner && link) {
+                link.href = hrcConfig.addFriendUrl;
+                banner.hidden = false;
+                if (dismiss) {
+                    dismiss.addEventListener('click', function () {
+                        banner.hidden = true;
+                    });
+                }
             }
         }
 
+        // 表示の有無にかかわらず、一度きりのフラグはURLから取り除いておく
+        // （残したままだと、再読み込みのたびに古い状態が復元されて見えてしまうため）。
         params.delete('hrc_unlocked');
         var query = params.toString();
         var cleanUrl = window.location.pathname + (query ? '?' + query : '') + window.location.hash;

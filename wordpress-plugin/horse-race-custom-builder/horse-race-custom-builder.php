@@ -3,15 +3,15 @@
  * Plugin Name: 競馬予想カスタムビルダー
  * Description: 既存の Keiba Race Sync（race カスタム投稿タイプ）のデータに、プロ厳選6ファクターを重ね合わせ、
  *              ユーザーが重み付けした「My総合指数」をクライアント側で即時算出・表示する。LINEログインで全レース解放。
- * Version: 0.5.2
+ * Version: 0.5.3
  */
 
 if (!defined('ABSPATH')) {
     exit;
 }
 
-define('HRC_VERSION', '0.5.2');
-define('HRC_ASSET_VER', '0.5.2');
+define('HRC_VERSION', '0.5.3');
+define('HRC_ASSET_VER', '0.5.3');
 define('HRC_FACTOR_KEYS', array(
     'param_bias', 'param_pace', 'param_agari_q',
     'param_jockey_roi', 'param_pedigree_fit', 'param_training_acc',
@@ -512,6 +512,10 @@ add_action('wp_enqueue_scripts', function () {
         'freeRaceKey' => hrc_get_todays_free_race_key(),
         'currentUrl' => (is_ssl() ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'],
         'addFriendUrl' => esc_url_raw(get_option('hrc_line_add_friend_url')),
+        // Cookie(HttpOnly)の署名を実際に検証した結果。ログイン直後のサンクスバナーは
+        // URLの一時パラメータだけでなく、これも真の場合に限って表示する
+        // （assets/custom-builder.js の initAddFriendBanner 参照）。
+        'isUnlocked' => hrc_is_unlocked(),
     ));
 });
 
