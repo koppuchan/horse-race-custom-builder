@@ -3,15 +3,15 @@
  * Plugin Name: 競馬予想カスタムビルダー
  * Description: 既存の Keiba Race Sync（race カスタム投稿タイプ）のデータに、プロ厳選6ファクターを重ね合わせ、
  *              ユーザーが重み付けした「My総合指数」をクライアント側で即時算出・表示する。LINEログインで全レース解放。
- * Version: 0.5.3
+ * Version: 0.5.4
  */
 
 if (!defined('ABSPATH')) {
     exit;
 }
 
-define('HRC_VERSION', '0.5.3');
-define('HRC_ASSET_VER', '0.5.3');
+define('HRC_VERSION', '0.5.4');
+define('HRC_ASSET_VER', '0.5.4');
 define('HRC_FACTOR_KEYS', array(
     'param_bias', 'param_pace', 'param_agari_q',
     'param_jockey_roi', 'param_pedigree_fit', 'param_training_acc',
@@ -272,9 +272,6 @@ add_action('init', function () {
     }
 
     $redirect = remove_query_arg(HRC_UNLOCK_QUERY_PARAM);
-    if ($unlocked_now) {
-        $redirect = add_query_arg('hrc_unlocked', '1', $redirect);
-    }
     wp_safe_redirect($redirect);
     exit;
 });
@@ -386,10 +383,6 @@ function hrc_rest_line_callback(WP_REST_Request $request)
     }
 
     hrc_issue_unlock_cookie($line_user_id);
-
-    // ログイン時の自動友だち追加プロンプトが使えないため、ログイン直後の1回だけ
-    // フロント側で友だち追加を案内するためのフラグをURLに付与して戻す。
-    $redirect_after = add_query_arg('hrc_unlocked', '1', $redirect_after);
 
     wp_safe_redirect($redirect_after);
     exit;
@@ -511,11 +504,6 @@ add_action('wp_enqueue_scripts', function () {
         'restBase' => esc_url_raw(rest_url('hrc/v1')),
         'freeRaceKey' => hrc_get_todays_free_race_key(),
         'currentUrl' => (is_ssl() ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'],
-        'addFriendUrl' => esc_url_raw(get_option('hrc_line_add_friend_url')),
-        // Cookie(HttpOnly)の署名を実際に検証した結果。ログイン直後のサンクスバナーは
-        // URLの一時パラメータだけでなく、これも真の場合に限って表示する
-        // （assets/custom-builder.js の initAddFriendBanner 参照）。
-        'isUnlocked' => hrc_is_unlocked(),
     ));
 });
 
@@ -587,12 +575,6 @@ add_shortcode('keiba_custom_builder', function ($atts) {
                 <a href="<?php echo esc_url($add_friend_url); ?>" target="_blank" rel="noopener" class="hrc-add-friend-cta">友だち追加はこちら</a>
                 <p class="hrc-locked-notice-sub">友だち追加後、LINEでお送りする専用リンクから全レースが解放されます。</p>
             <?php endif; ?>
-        </div>
-
-        <div id="hrc-add-friend-banner" class="hrc-add-friend-banner" hidden>
-            <p>ログインありがとうございます！最後に公式LINEの友だち追加をお願いします。</p>
-            <a href="#" id="hrc-add-friend-link" target="_blank" rel="noopener">友だち追加はこちら</a>
-            <button type="button" id="hrc-add-friend-dismiss" aria-label="閉じる">×</button>
         </div>
     </div>
     <?php

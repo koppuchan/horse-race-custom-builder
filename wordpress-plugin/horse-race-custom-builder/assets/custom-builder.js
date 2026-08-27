@@ -176,39 +176,18 @@
         });
     }
 
-    // ログインチャネルに公式アカウントを紐付けられず、LINE側の自動友だち追加プロンプトが
-    // 使えないため、ログイン直後の1回だけこちらで案内を出す。
-    (function initAddFriendBanner() {
+    // ログイン直後の「友だち追加をお願いします」バナーは、お客様のご要望により廃止した
+    // （ログイン済みユーザーに重ねて友だち追加を促す必要はないため）。ロック中ページの
+    // 友だち追加CTA（アンロック手段そのもの。上のhrc-locked-noticeの中）はそのまま残す。
+    //
+    // 過去にこのバナーを経由して発行された ?hrc_unlocked=1 付きのURLが、ブックマークや
+    // 共有リンクとして残っている可能性があるため、見えてしまわないようURLからは
+    // 引き続き取り除いておく。
+    (function stripLegacyUnlockedParam() {
         var params = new URLSearchParams(window.location.search);
-        if (params.get('hrc_unlocked') !== '1') {
+        if (!params.has('hrc_unlocked')) {
             return;
         }
-
-        // hrc_unlocked=1 は、サーバーがCookie発行を試みた直後に一度だけ付けるURLパラメータ。
-        // ただしCookie自体はHttpOnlyで発行されるためJSからは中身を確認できず、パラメータの
-        // 有無だけを信用すると「実際はCookieが保存されなかった（プライベートブラウジングや
-        // 以前のURLの再訪問など）のに、このバナーだけ表示されてしまう」不整合が起こりうる
-        // （お客様報告で確認済み: ロックされたままの画面に「ログインありがとうございます」
-        // が出ていた）。
-        // hrcConfig.isUnlocked はPHP側でCookieの署名を実際に検証した結果なので、
-        // これも真の場合のみバナーを出す。
-        if (hrcConfig.isUnlocked && hrcConfig.addFriendUrl) {
-            var banner = root.querySelector('#hrc-add-friend-banner');
-            var link = root.querySelector('#hrc-add-friend-link');
-            var dismiss = root.querySelector('#hrc-add-friend-dismiss');
-            if (banner && link) {
-                link.href = hrcConfig.addFriendUrl;
-                banner.hidden = false;
-                if (dismiss) {
-                    dismiss.addEventListener('click', function () {
-                        banner.hidden = true;
-                    });
-                }
-            }
-        }
-
-        // 表示の有無にかかわらず、一度きりのフラグはURLから取り除いておく
-        // （残したままだと、再読み込みのたびに古い状態が復元されて見えてしまうため）。
         params.delete('hrc_unlocked');
         var query = params.toString();
         var cleanUrl = window.location.pathname + (query ? '?' + query : '') + window.location.hash;

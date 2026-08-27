@@ -129,42 +129,6 @@
     color: #555;
 }
 
-.hrc-add-friend-banner {
-    position: relative;
-    text-align: center;
-    padding: 20px 40px;
-    margin-bottom: 24px;
-    background: #e9fbf1;
-    border: 2px solid #06c755;
-    border-radius: 8px;
-}
-
-.hrc-add-friend-banner p {
-    margin: 0 0 10px;
-    font-weight: bold;
-}
-
-.hrc-add-friend-banner a {
-    display: inline-block;
-    padding: 10px 20px;
-    background: #06c755;
-    color: #fff;
-    border-radius: 6px;
-    text-decoration: none;
-    font-size: 1.05em;
-}
-
-#hrc-add-friend-dismiss {
-    position: absolute;
-    top: 8px;
-    right: 12px;
-    background: none;
-    border: none;
-    font-size: 1.2em;
-    cursor: pointer;
-    color: #666;
-}
-
 @media (max-width: 600px) {
     .hrc-factors {
         flex-direction: column;
