@@ -63,8 +63,13 @@ if not exist "%EXE%" (
 
 REM Keep the working directory next to the exe; some COM components resolve
 REM their own relative paths against it.
+REM
+REM %1 is an optional yyyy-MM-dd date, forwarded straight through to
+REM "score" (see Program.cs). Left blank for the normal scheduled runs,
+REM which score today as always; only set when manually re-running a
+REM past day (e.g. after the day rolled over past a run that crashed).
 pushd "%~dp0bin\Debug\net48"
-"%EXE%" score >> "%~dp0%LOGFILE%" 2>&1
+"%EXE%" score %1 >> "%~dp0%LOGFILE%" 2>&1
 set EXITCODE=%ERRORLEVEL%
 popd
 

@@ -8,7 +8,9 @@ cd /d "%~dp0"
 if exist secrets.local.bat call secrets.local.bat
 
 cd /d "%~dp0bin\Debug\net48"
-KeibaDataCollector.exe score
+REM %1 is an optional yyyy-MM-dd date (e.g. run-score.bat 2026-08-30) to
+REM re-score a past day instead of today.
+KeibaDataCollector.exe score %1
 
 echo.
 echo ===== Finished. Press any key to close this window. =====
