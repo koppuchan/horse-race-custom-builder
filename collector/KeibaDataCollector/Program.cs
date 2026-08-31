@@ -120,6 +120,29 @@ namespace KeibaDataCollector
                         // 当日出走馬の6ファクターを算出しWordPress(hrc_factors)へ反映する。
                         // ローカルSQLite（backfill済みの履歴）を読むだけで、JV-Link/UmaConnからは
                         // 当日の出走表（KettoNum突き合わせ用）のみ取得する。
+                        //
+                        // 引数（省略可）: yyyy-MM-dd形式の日付。省略時は今日の日付（従来通り）。
+                        //
+                        // 注意: RA/SE自体はJVOpen(ThisWeekAndToday)でJV-Link/UmaConn側から都度
+                        // 取り直す作りのため、この絞り込みが指定日をどこまで遡って返すかは
+                        // JV-Link側の「今週」判定に依存し、こちらでは制御できない。日をまたいだ
+                        // 直後（例: 昨日のscore失敗分を今日中に再実行）なら通ることが多いが、
+                        // 保証はできないので、実行後のログで対象日のレースが実際に何件処理された
+                        // かを必ず確認すること（0レースなら、この絞り込みの対象外になっている）。
+                        var targetDate = DateTime.Today;
+                        foreach (var a in args)
+                        {
+                            if (DateTime.TryParseExact(a, "yyyy-MM-dd",
+                                System.Globalization.CultureInfo.InvariantCulture,
+                                System.Globalization.DateTimeStyles.None, out var parsed))
+                            {
+                                targetDate = parsed;
+                                break;
+                            }
+                        }
+                        if (targetDate != DateTime.Today)
+                            Console.WriteLine($"対象日: {targetDate:yyyy-MM-dd}（引数指定）");
+
                         var wp = new WordPressClient(
                             AppConfig.WordPressBaseUrl,
                             AppConfig.WordPressUser,
@@ -128,8 +151,8 @@ namespace KeibaDataCollector
                         using (var store = new HistoricalDataStore(AppConfig.HistoricalDbPath))
                         {
                             var scoring = new FactorScoringService(store);
-                            RunScoreFor(jvLink, wp, scoring);
-                            RunScoreFor(umaConn, wp, scoring);
+                            RunScoreFor(jvLink, wp, scoring, targetDate);
+                            RunScoreFor(umaConn, wp, scoring, targetDate);
                         }
                         break;
                     }
@@ -197,6 +220,8 @@ namespace KeibaDataCollector
                         Console.WriteLine("  predict  : 朝一オッズの人気順から予想印を生成しWordPressへ反映する。");
                         Console.WriteLine("  score    : 当日出走馬の6ファクターを算出しWordPress(hrc_factors)へ反映する。");
                         Console.WriteLine("            事前にbackfillで履歴を蓄積しておく必要がある。");
+                        Console.WriteLine("            引数省略時は今日。yyyy-MM-dd形式の日付を渡すとその日を対象にする");
+                        Console.WriteLine("            （例: score 2026-08-30。ただしJV-Link側の「今週」判定の範囲外だと0件になる）。");
                         Console.WriteLine("  watch    : レース確定を監視し、結果・払戻を随時WordPressへ反映する。");
                         Console.WriteLine("  probe    : 調査用。どのデータ種別で何が取得できるか確認する（WordPressへは書き込まない）。");
                         Console.WriteLine("            レースを指定する場合: probe 20260811-46-1R");
@@ -323,12 +348,12 @@ namespace KeibaDataCollector
             }
         }
 
-        private static void RunScoreFor(JvSpecComDataSource source, WordPress.WordPressClient wp, FactorScoringService scoring)
+        private static void RunScoreFor(JvSpecComDataSource source, WordPress.WordPressClient wp, FactorScoringService scoring, DateTime targetDate)
         {
             try
             {
                 source.Initialize(AppConfig.JvLinkSoftwareId);
-                new FactorPublishService(source, wp, scoring).RunForToday(DateTime.Today);
+                new FactorPublishService(source, wp, scoring).RunForToday(targetDate);
             }
             catch (Exception ex)
             {
