@@ -121,9 +121,26 @@ namespace KeibaDataCollector.Services
             int published = 0, skipped = 0, failed = 0;
             foreach (var slug in entriesByRace.Keys)
             {
+                // スコア計算自体も1レース単位で保護する。以前はここが素通しで、
+                // FactorScoringService内の未知の例外（実機で発生: 特定コース条件の
+                // 母集団が0件になりSUM集計がNULLを返してInvalidCastExceptionになった
+                // ケース）が起きると、その日のこのソースの残り全レースが処理されずに
+                // 巻き添えで終了していた（中京が丸ごと・新潟の一部が欠けた原因）。
+                // 直接の原因はFactorScoringService側で個別に直したが、同じ壊れ方を
+                // 二度としないよう、ここでもレース単位に隔離しておく。
                 var scores = new Dictionary<int, FactorScores>();
-                foreach (var (umaban, input) in entriesByRace[slug])
-                    scores[umaban] = _scoring.Compute(input);
+                try
+                {
+                    foreach (var (umaban, input) in entriesByRace[slug])
+                        scores[umaban] = _scoring.Compute(input);
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    Console.WriteLine(
+                        $"[{_source.SourceName}] {slug} 6ファクターの計算に失敗（このレースのみスキップして続行）: {ex.Message}");
+                    continue;
+                }
 
                 // 1レースの送信失敗で、残りのレースまで巻き添えにしない。
                 // 既存システムの朝一バッチはここで例外を上まで投げてしまい、WordPressが

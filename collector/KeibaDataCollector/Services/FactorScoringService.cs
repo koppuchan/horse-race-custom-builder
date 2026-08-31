@@ -138,10 +138,17 @@ namespace KeibaDataCollector.Services
                 {
                     if (r.Read())
                     {
+                        // WHERE条件に合致する行が1件も無いと、SUM/AVGは（0件ではなく）SQL上NULLを
+                        // 返す（GROUP BYと違い、集約対象そのものが0行のため）。placedAvg/restAvgは
+                        // 元々IsDBNullで見ていたが、SUM側のplacedCount/restCountはGetInt32を無条件で
+                        // 呼んでおり、この場合にInvalidCastExceptionで落ちていた（実機で発生：
+                        // 中京の特定コース条件で該当データが0件になり、その日のJV-Link側の残り
+                        // 全レースの算出が巻き添えで止まった）。0件ならMinGroupSample未満として
+                        // 扱われnullを返すのが正しい挙動なので、NULLは0として読む。
                         if (!r.IsDBNull(0)) placedAvg = r.GetDouble(0);
-                        placedCount = r.GetInt32(1);
+                        if (!r.IsDBNull(1)) placedCount = r.GetInt32(1);
                         if (!r.IsDBNull(2)) restAvg = r.GetDouble(2);
-                        restCount = r.GetInt32(3);
+                        if (!r.IsDBNull(3)) restCount = r.GetInt32(3);
                     }
                 }
             }
