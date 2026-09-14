@@ -3,15 +3,15 @@
  * Plugin Name: 競馬予想カスタムビルダー
  * Description: 既存の Keiba Race Sync（race カスタム投稿タイプ）のデータに、プロ厳選6ファクターを重ね合わせ、
  *              ユーザーが重み付けした「My総合指数」をクライアント側で即時算出・表示する。LINEログインで全レース解放。
- * Version: 0.5.4
+ * Version: 0.5.5
  */
 
 if (!defined('ABSPATH')) {
     exit;
 }
 
-define('HRC_VERSION', '0.5.4');
-define('HRC_ASSET_VER', '0.5.4');
+define('HRC_VERSION', '0.5.5');
+define('HRC_ASSET_VER', '0.5.5');
 define('HRC_FACTOR_KEYS', array(
     'param_bias', 'param_pace', 'param_agari_q',
     'param_jockey_roi', 'param_pedigree_fit', 'param_training_acc',
@@ -306,7 +306,30 @@ add_action('rest_api_init', function () {
             'race_key' => array('required' => true),
         ),
     ));
+
+    // keiba-race-sync（/prediction/）向けの公開判定API。同一サーバー上のPHP関数呼び出し
+    // （hrc_is_race_visible）が使える場合はそちらの方が速いが、プラグイン間の結合を
+    // 疎に保ちたい場合や別プロセス・別サーバーから呼びたい場合のためにHTTPでも提供する。
+    // 当方のCookieや無料レース選定ロジックの詳細は一切外に出さず、真偽値だけを返す。
+    register_rest_route('hrc/v1', '/visibility', array(
+        'methods' => 'GET',
+        'callback' => 'hrc_rest_visibility',
+        'permission_callback' => '__return_true',
+        'args' => array(
+            'race_key' => array('required' => true),
+        ),
+    ));
 });
+
+function hrc_rest_visibility(WP_REST_Request $request)
+{
+    $race_key = $request->get_param('race_key');
+    return array(
+        'raceKey' => $race_key,
+        'visible' => hrc_is_race_visible($race_key),
+        'isTodaysFreeRace' => ($race_key === hrc_get_todays_free_race_key()),
+    );
+}
 
 function hrc_rest_line_login_url(WP_REST_Request $request)
 {
@@ -392,10 +415,95 @@ function hrc_rest_line_callback(WP_REST_Request $request)
  * レースデータAPI：無料レース or アンロック済みの場合のみ、出走馬 × 6ファクターを返す
  * ------------------------------------------------------------------------- */
 
+/**
+ * ある1頭のhrc_factorsから、6指標すべて×1固定の単純平均を返す。
+ * 「算出できたものだけ平均する」方針はcustom-builder.js側のrenderRanking（ユーザーが
+ * 配分を変更できる方）と同じ考え方だが、こちらは配分固定なので全指標の重みは常に1。
+ * 1つも算出できていない馬（新馬・データ不足等）はnullを返し、比較対象から外す。
+ */
+function hrc_compute_fixed_avg_score($horse_factors)
+{
+    $sum = 0.0;
+    $count = 0;
+    foreach (HRC_FACTOR_KEYS as $key) {
+        $camel = lcfirst(str_replace('_', '', ucwords($key, '_')));
+        if (isset($horse_factors[$camel]) && is_numeric($horse_factors[$camel])) {
+            $sum += (float) $horse_factors[$camel];
+            $count++;
+        }
+    }
+    return $count > 0 ? $sum / $count : null;
+}
+
+/**
+ * 本日のレースの中から、6指標×1固定・My総合指数が最も高い1頭を擁するレースを選ぶ
+ * （無料公開レース自動選定。指示書「5. 無料公開レースの自動選定方法」〜「9. 自動選定から
+ * 除外するレース」に対応）。
+ *
+ * ・各レースの「1位馬の指数」同士を比較し、最も高いレースを採用する。
+ * ・1位が同点の場合は「1位と2位の指数差」が大きい方を優先する。
+ * ・hrc_factorsが無い／1頭も指数を算出できないレースは除外する。
+ *
+ * 計算コストがあるため結果は当日分をtransientで30分キャッシュする。score実行（3時間おき）
+ * の合間に少しずつ精度が上がっていくのは許容し、一方でページ表示のたびに全レース分の
+ * JSONデコードをやり直すことは避ける。
+ */
+function hrc_compute_todays_free_race_key($ymd)
+{
+    $races = get_posts(array(
+        'post_type' => 'race',
+        'post_status' => 'publish',
+        'posts_per_page' => -1,
+        'no_found_rows' => true,
+        'meta_query' => array(
+            array('key' => 'race_key', 'value' => $ymd . '-', 'compare' => 'LIKE'),
+        ),
+    ));
+
+    $best_key = null;
+    $best_top = null;
+    $best_gap = null;
+
+    foreach ($races as $race) {
+        $race_key = get_post_meta($race->ID, 'race_key', true);
+        if (empty($race_key)) {
+            continue;
+        }
+        $factors = hrc_decode_meta($race->ID, 'hrc_factors', array());
+        $scores = array();
+        foreach ($factors as $umaban => $horse_factors) {
+            $score = hrc_compute_fixed_avg_score($horse_factors);
+            if ($score !== null) {
+                $scores[] = $score;
+            }
+        }
+        if (empty($scores)) {
+            continue; // My総合指数を算出できる馬が1頭もいない＝自動選定から除外。
+        }
+        rsort($scores);
+        $top = $scores[0];
+        $gap = count($scores) > 1 ? ($scores[0] - $scores[1]) : $scores[0];
+
+        $is_better = ($best_top === null)
+            || ($top > $best_top)
+            || ($top === $best_top && $gap > $best_gap);
+        if ($is_better) {
+            $best_key = $race_key;
+            $best_top = $top;
+            $best_gap = $gap;
+        }
+    }
+
+    return $best_key;
+}
+
 function hrc_get_todays_free_race_key()
 {
     $ymd = wp_date('Ymd');
 
+    // 手動指定（管理画面の「本日のレースを無料公開に設定する」チェック）が残っていれば
+    // それを最優先する。指示書により自動選定が正式運用になったため通常は使わない想定だが、
+    // 自動選定が明らかに不適切な結果を返した場合の非常用の上書き手段として残す。
     $flagged = get_posts(array(
         'post_type' => 'race',
         'post_status' => 'publish',
@@ -410,14 +518,24 @@ function hrc_get_todays_free_race_key()
         return get_post_meta($flagged[0]->ID, 'race_key', true);
     }
 
-    // 手動指定が無ければ、当日の最小の競馬場コード × 最小のレース番号を暫定の無料レースとする。
-    //
+    $cache_key = 'hrc_free_race_' . $ymd;
+    $cached = get_transient($cache_key);
+    if ($cached !== false) {
+        return $cached ?: null; // 空文字は「その時点では対象レース無し」をキャッシュしたもの。
+    }
+
+    $computed = hrc_compute_todays_free_race_key($ymd);
+    set_transient($cache_key, $computed !== null ? $computed : '', 30 * MINUTE_IN_SECONDS);
+    if ($computed !== null) {
+        return $computed;
+    }
+
+    // 6指標での算出が1件もできない（＝scoreがまだ当日分を反映していない等）場合のみ、
+    // 従来の暫定フォールバック（当日最小の場コード×最小レース番号）を使う。
     // 投稿日時（post_date）で「一番早く投稿されたレース」を拾う実装を最初に試したが、
     // 実データで検証したところ 20260819-30-12R（門別12R）が最速で投稿されており、
     // 収集アプリの処理順は発走順とは無関係だと分かった。投稿順を無料レース判定に
-    // 使うのは誤りなので、race_key から機械的に決まる「最小の場コード・最小レース番号」に変更する。
-    // これも本当の発走時刻順ではないが、少なくとも「関係ない後半のレース」が
-    // 無料枠になる事故は起きない。
+    // 使うのは誤りなので、race_key から機械的に決まる「最小の場コード・最小レース番号」にしてある。
     if (!function_exists('keiba_race_sync_get_races_by_track')) {
         return null;
     }
@@ -428,6 +546,16 @@ function hrc_get_todays_free_race_key()
     $first_track = reset($tracks);
     $first_race = reset($first_track['races']);
     return $first_race ? $first_race['race_key'] : null;
+}
+
+/**
+ * 訪問者がこのレースの診断・予想を閲覧できるか。本日の自動選定無料レース、または
+ * LINE等でアンロック済みなら真。keiba-race-sync側（/prediction/）との連携用の公開関数。
+ * 当方のCookie（HttpOnly）や無料レース判定ロジックをそちらへ持ち出させないための唯一の窓口。
+ */
+function hrc_is_race_visible($race_key)
+{
+    return ($race_key === hrc_get_todays_free_race_key()) || hrc_is_unlocked();
 }
 
 function hrc_rest_race_data(WP_REST_Request $request)
@@ -449,7 +577,7 @@ function hrc_rest_race_data(WP_REST_Request $request)
     $post_id = $posts[0]->ID;
 
     $is_free = ($race_key === hrc_get_todays_free_race_key());
-    if (!$is_free && !hrc_is_unlocked()) {
+    if (!hrc_is_race_visible($race_key)) {
         return new WP_Error(
             'hrc_locked',
             'このレースの診断はLINE登録で解放されます。',
