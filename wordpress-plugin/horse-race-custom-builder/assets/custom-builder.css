@@ -10,6 +10,29 @@
     border-radius: 8px;
 }
 
+.hrc-free-promo {
+    margin-bottom: 24px;
+    padding: 20px;
+    text-align: center;
+    background: #e9fbf1;
+    border: 2px dashed #06c755;
+    border-radius: 8px;
+}
+
+.hrc-free-promo p {
+    margin: 4px 0;
+}
+
+.hrc-free-promo-headline {
+    font-size: 1.15em;
+    font-weight: bold;
+}
+
+.hrc-free-promo-arrow {
+    color: #06c755;
+    font-weight: bold;
+}
+
 .hrc-step h3 {
     margin-top: 0;
 }

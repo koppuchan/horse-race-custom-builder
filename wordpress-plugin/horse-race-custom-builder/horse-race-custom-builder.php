@@ -3,15 +3,15 @@
  * Plugin Name: 競馬予想カスタムビルダー
  * Description: 既存の Keiba Race Sync（race カスタム投稿タイプ）のデータに、プロ厳選6ファクターを重ね合わせ、
  *              ユーザーが重み付けした「My総合指数」をクライアント側で即時算出・表示する。LINEログインで全レース解放。
- * Version: 0.5.5
+ * Version: 0.5.6
  */
 
 if (!defined('ABSPATH')) {
     exit;
 }
 
-define('HRC_VERSION', '0.5.5');
-define('HRC_ASSET_VER', '0.5.5');
+define('HRC_VERSION', '0.5.6');
+define('HRC_ASSET_VER', '0.5.6');
 define('HRC_FACTOR_KEYS', array(
     'param_bias', 'param_pace', 'param_agari_q',
     'param_jockey_roi', 'param_pedigree_fit', 'param_training_acc',
@@ -647,6 +647,14 @@ add_shortcode('keiba_custom_builder', function ($atts) {
     ob_start();
     ?>
     <div class="hrc-builder">
+        <div class="hrc-free-promo">
+            <p class="hrc-free-promo-headline">⭐ まずは1レース完全無料</p>
+            <p>登録なしで、選んだ1レースの診断（My総合指数・ランキング）をそのままご覧いただけます。</p>
+            <p class="hrc-free-promo-arrow">↓</p>
+            <p class="hrc-free-promo-headline">LINE無料登録で全レース開放</p>
+            <p>2レース目以降も、当日提供している全レースの診断が見放題になります。</p>
+        </div>
+
         <div class="hrc-step" id="hrc-step1">
             <h3>STEP 1: 分析レースを選択</h3>
             <?php if (empty($tracks)): ?>
