@@ -67,6 +67,20 @@ namespace KeibaDataCollector.Interop
         /// </summary>
         public void Initialize(string softwareId)
         {
+            // 前のセッションがCloseされないまま残っていれば先に手放す
+            // （再初期化のときに、自分が持っているロックを自分で待たないため）。
+            ReleaseSessionLock();
+
+            // 同じVPSの他システムが同時にInitすると、シェル通知アイコンのタイムアウトなどで
+            // 失敗・遅延しやすい（2026-10-25に地方側のNVInitが失敗した）。Initの間だけ排他にする。
+            using (JvSessionLock.Acquire($"{SourceName} Init", InitLockTimeout))
+            {
+                InitializeCore(softwareId);
+            }
+        }
+
+        private void InitializeCore(string softwareId)
+        {
             EnsureComObject();
 
             for (int attempt = 1; ; attempt++)
@@ -170,6 +184,10 @@ namespace KeibaDataCollector.Interop
 
         public OpenResult Open(string dataSpec, string fromTime, DataOption option)
         {
+            // Open〜Closeの間は、他のシステムが同時にJV-Link/UmaConnを使わないようにする。
+            // Closeで解放する（全ての呼び出し元が、失敗時も含めて必ずCloseを呼ぶ作りになっている）。
+            AcquireSessionLock($"{SourceName} Open {dataSpec}", BatchLockTimeout);
+
             // JVOpen/NVOpen(string dataspec, string fromtime, int option,
             //        out int readcount, out int downloadcount, out string lastfiletimestamp)
             // readcount/downloadcount/lastfiletimestampはout引数のため、ByRefでのInvokeが必要
@@ -242,6 +260,8 @@ namespace KeibaDataCollector.Interop
         {
             // JVRTOpen/NVRTOpen(string dataspec, string key) -- リアルタイム系データ種別コードは仕様書で要確認
             // （速報オッズ/中間成績/確定成績/払戻 等でコードが分かれている）。
+            // 速報系は1回の問い合わせが短く、結果の反映や予想を止めたくないので、待ちの上限を短くする。
+            AcquireSessionLock($"{SourceName} RTOpen {dataSpec}", RealtimeLockTimeout);
             return (int)Invoke("RTOpen", dataSpec, key);
         }
 
@@ -257,6 +277,10 @@ namespace KeibaDataCollector.Interop
                 // Dispose経路から呼ばれるため、後片付けの失敗でアプリ全体を落とさない。
                 Console.WriteLine($"[{SourceName}] Close失敗（無視して続行）: {ex.Message}");
             }
+            finally
+            {
+                ReleaseSessionLock();
+            }
         }
 
         public void Dispose()
@@ -265,6 +289,31 @@ namespace KeibaDataCollector.Interop
             if (_com != null && Marshal.IsComObject(_com))
                 Marshal.FinalReleaseComObject(_com);
             _com = null;
+        }
+
+        // 他システムとのデータ取得セッションの重なりを防ぐロック。詳細は JvSessionLock を参照。
+        // 待ちの上限は、超えたらロックなしで続行する（取得が止まりきらないための安全弁）。
+        //   Init     : 数秒〜1分で終わる。
+        //   Open     : RACE全体の読み込みは数分〜十数分、バックフィルは更に長い。
+        //   RTOpen   : 結果反映や予想の1回の問い合わせ。長く待たせない。
+        private IDisposable _sessionLock;
+        private static readonly TimeSpan InitLockTimeout = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan BatchLockTimeout = TimeSpan.FromMinutes(30);
+        private static readonly TimeSpan RealtimeLockTimeout = TimeSpan.FromSeconds(90);
+
+        private void AcquireSessionLock(string purpose, TimeSpan timeout)
+        {
+            // 既に持っている（前のセッションがCloseされていない想定外の状況）。
+            // 二重に取って自分のロックを自分で待たないよう、何もしない。
+            if (_sessionLock != null) return;
+            _sessionLock = JvSessionLock.Acquire(purpose, timeout);
+        }
+
+        private void ReleaseSessionLock()
+        {
+            var held = _sessionLock;
+            _sessionLock = null;
+            if (held != null) held.Dispose();
         }
 
         private object Invoke(string methodSuffix, params object[] args)
