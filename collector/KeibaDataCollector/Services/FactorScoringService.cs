@@ -37,6 +37,32 @@ namespace KeibaDataCollector.Services
             _conn = store.Connection;
         }
 
+        // 母集団の統計（枠番別・騎手別・種牡馬別・コース別の平均や標準偏差）は、同じコース・
+        // 距離・馬場なら出走馬ごとに計算し直しても同じ値になる。以前は1頭ごとに全件を
+        // 集計し直しており（特に調教は対象コース全件の読み込み）、1レースに数十秒〜数分かかって
+        // 1時間のタスク上限に収まらなかった（2026-10-25）。1回のscore実行の間だけ使い回す。
+        // 実行中にDBが書き換わらない前提（backfillとは同時に動かさない）。値も計算式も変えない。
+        private readonly Dictionary<string, object> _memo = new Dictionary<string, object>();
+
+        private T Memo<T>(string key, Func<T> compute)
+        {
+            if (_memo.TryGetValue(key, out var cached)) return (T)cached;
+            var value = compute();
+            _memo[key] = value;
+            return value;
+        }
+
+        /// <summary>②テン速度の「コース単位」の集計結果。Usable=falseは、サンプル不足などで
+        /// 算出できない（nullを返す）コース。</summary>
+        private sealed class PaceCourseStats
+        {
+            public static readonly PaceCourseStats Unusable = new PaceCourseStats();
+            public bool Usable;
+            public bool FavorsFront;
+            public double Mean;
+            public double StdDev;
+        }
+
         public FactorScores Compute(FactorScoringInput input)
         {
             return new FactorScores
@@ -56,6 +82,18 @@ namespace KeibaDataCollector.Services
         /// 「連対率・回収率」の回収率側が未実装のまま欠けていたため追加した）。
         /// 回収率は複勝払戻（fukusho_payout）を使う（④騎手コース回収率と同じ計算方法）。</summary>
         private double? ComputeWakuBias(string trackCode, int distance, string surfaceCode, int waku)
+        {
+            var stats = Memo($"waku|{trackCode}|{distance}|{surfaceCode}",
+                () => LoadWakuStats(trackCode, distance, surfaceCode));
+
+            if (!stats.TryGetValue(waku, out var thisStat) || stats.Count < 2) return null;
+
+            var rentaiScore = ToDeviationScore(thisStat.RentaiRate, stats.Values.Select(v => v.RentaiRate), invert: false);
+            var roiScore = ToDeviationScore(thisStat.Roi, stats.Values.Select(v => v.Roi), invert: false);
+            return (rentaiScore + roiScore) / 2.0;
+        }
+
+        private Dictionary<int, (double RentaiRate, double Roi)> LoadWakuStats(string trackCode, int distance, string surfaceCode)
         {
             var stats = new Dictionary<int, (double RentaiRate, double Roi)>();
             using (var cmd = new SQLiteCommand(@"
@@ -84,11 +122,7 @@ namespace KeibaDataCollector.Services
                 }
             }
 
-            if (!stats.TryGetValue(waku, out var thisStat) || stats.Count < 2) return null;
-
-            var rentaiScore = ToDeviationScore(thisStat.RentaiRate, stats.Values.Select(v => v.RentaiRate), invert: false);
-            var roiScore = ToDeviationScore(thisStat.Roi, stats.Values.Select(v => v.Roi), invert: false);
-            return (rentaiScore + roiScore) / 2.0;
+            return stats;
         }
 
         /// <summary>②テン速度・展開: クライアント基準「近3走の前半3Fタイム・脚質実績からの
@@ -119,6 +153,17 @@ namespace KeibaDataCollector.Services
             }
             if (!horseStyle.HasValue) return null;
 
+            var course = Memo($"pace|{trackCode}|{distance}|{surfaceCode}",
+                () => LoadPaceCourseStats(trackCode, distance, surfaceCode));
+            if (!course.Usable) return null;
+
+            return ToDeviationScore(horseStyle.Value, course.Mean, course.StdDev, invert: course.FavorsFront);
+        }
+
+        /// <summary>②テン速度のコース単位の集計（複勝圏内の馬の方が前目を通過しているか＝先行有利か、
+        /// と、そのコースの通過位置の平均・標準偏差）。馬に依存しないので1コース1回だけ計算する。</summary>
+        private PaceCourseStats LoadPaceCourseStats(string trackCode, int distance, string surfaceCode)
+        {
             double? placedAvg = null, restAvg = null;
             int placedCount = 0, restCount = 0;
             using (var cmd = new SQLiteCommand(@"
@@ -153,7 +198,7 @@ namespace KeibaDataCollector.Services
                 }
             }
             if (placedCount < MinGroupSample || restCount < MinGroupSample || !placedAvg.HasValue || !restAvg.HasValue)
-                return null;
+                return PaceCourseStats.Unusable;
 
             // 複勝圏内の馬の方が前目(値が小さい)を通過していれば、このコースは先行有利。
             var trackFavorsFront = placedAvg.Value < restAvg.Value;
@@ -166,9 +211,9 @@ namespace KeibaDataCollector.Services
                     p.AddWithValue("@distance", distance);
                     p.AddWithValue("@surface", surfaceCode);
                 });
-            if (popCount < MinGroupSample || stddev <= 0) return null;
+            if (popCount < MinGroupSample || stddev <= 0) return PaceCourseStats.Unusable;
 
-            return ToDeviationScore(horseStyle.Value, mean, stddev, invert: trackFavorsFront);
+            return new PaceCourseStats { Usable = true, FavorsFront = trackFavorsFront, Mean = mean, StdDev = stddev };
         }
 
         /// <summary>③上がり3F質・末脚: 直近走の上がり3Fタイム平均を、同じ馬場種別（芝/ダート）
@@ -191,9 +236,9 @@ namespace KeibaDataCollector.Services
             }
             if (!recentAvg.HasValue) return null;
 
-            var (mean, stddev, count) = GetPopulationMeanStdDev(
+            var (mean, stddev, count) = Memo($"agari|{surfaceCode}", () => GetPopulationMeanStdDev(
                 "SELECT agari_3f FROM race_entries WHERE track_surface_code=@surface AND agari_3f IS NOT NULL AND agari_3f > 0",
-                p => p.AddWithValue("@surface", surfaceCode));
+                p => p.AddWithValue("@surface", surfaceCode)));
             if (count < MinGroupSample || stddev <= 0) return null;
 
             return ToDeviationScore(recentAvg.Value, mean, stddev, invert: true);
@@ -206,6 +251,14 @@ namespace KeibaDataCollector.Services
         {
             if (string.IsNullOrEmpty(jockeyCode)) return null;
 
+            var rois = Memo($"jockey|{trackCode}|{distance}", () => LoadJockeyRois(trackCode, distance));
+
+            if (!rois.TryGetValue(jockeyCode, out var thisRoi) || rois.Count < 2) return null;
+            return ToDeviationScore(thisRoi, rois.Values, invert: false);
+        }
+
+        private Dictionary<string, double> LoadJockeyRois(string trackCode, int distance)
+        {
             var rois = new Dictionary<string, double>();
             using (var cmd = new SQLiteCommand(@"
                 SELECT jockey_code, COUNT(*) total, SUM(COALESCE(fukusho_payout, 0)) totalPayout
@@ -229,8 +282,7 @@ namespace KeibaDataCollector.Services
                 }
             }
 
-            if (!rois.TryGetValue(jockeyCode, out var thisRoi) || rois.Count < 2) return null;
-            return ToDeviationScore(thisRoi, rois.Values, invert: false);
+            return rois;
         }
 
         /// <summary>⑤血統適性・妙味: 種牡馬（父）の当該コース(track×distance)における
@@ -268,6 +320,17 @@ namespace KeibaDataCollector.Services
 
         private double? ComputeSireLineScore(string trackCode, int distance, string hansyokuNum)
         {
+            var stats = Memo($"sire|{trackCode}|{distance}", () => LoadSireStats(trackCode, distance));
+
+            if (!stats.TryGetValue(hansyokuNum, out var thisStat) || stats.Count < 2) return null;
+
+            var placeScore = ToDeviationScore(thisStat.PlaceRate, stats.Values.Select(v => v.PlaceRate), invert: false);
+            var roiScore = ToDeviationScore(thisStat.Roi, stats.Values.Select(v => v.Roi), invert: false);
+            return (placeScore + roiScore) / 2.0;
+        }
+
+        private Dictionary<string, (double PlaceRate, double Roi)> LoadSireStats(string trackCode, int distance)
+        {
             var stats = new Dictionary<string, (double PlaceRate, double Roi)>();
             using (var cmd = new SQLiteCommand(@"
                 SELECT pl.sire_hansyoku_num, COUNT(*) total,
@@ -294,11 +357,7 @@ namespace KeibaDataCollector.Services
                 }
             }
 
-            if (!stats.TryGetValue(hansyokuNum, out var thisStat) || stats.Count < 2) return null;
-
-            var placeScore = ToDeviationScore(thisStat.PlaceRate, stats.Values.Select(v => v.PlaceRate), invert: false);
-            var roiScore = ToDeviationScore(thisStat.Roi, stats.Values.Select(v => v.Roi), invert: false);
-            return (placeScore + roiScore) / 2.0;
+            return stats;
         }
 
         /// <summary>⑥調教・加速ラップ: 直近の調教（坂路 or ウッドチップ、新しい方）のラスト1F
@@ -331,10 +390,13 @@ namespace KeibaDataCollector.Services
             }
             if (!course.HasValue || !lastFurlong.HasValue) return null;
 
-            var (mean, stddev, count) = GetPopulationMeanStdDev(
+            // 調教の母集団は対象コース種別（坂路/ウッドチップ）の全件を読み込む重い集計。
+            // 以前は出走馬ごとに全件を読み直していたため、コース種別ごとに1回だけにする。
+            var courseName = course.Value.ToString();
+            var (mean, stddev, count) = Memo($"train|{courseName}", () => GetPopulationMeanStdDev(
                 "SELECT CAST(lap_times_seconds AS TEXT) FROM training_laps WHERE course=@course;",
-                p => p.AddWithValue("@course", course.Value.ToString()),
-                extractFirstLap: true);
+                p => p.AddWithValue("@course", courseName),
+                extractFirstLap: true));
             if (count < MinGroupSample || stddev <= 0) return null;
 
             var baseScore = ToDeviationScore(lastFurlong.Value, mean, stddev, invert: true); // タイムは短いほど良い

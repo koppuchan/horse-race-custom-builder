@@ -38,6 +38,10 @@ namespace KeibaDataCollector.Services
 
         public void RunForToday(DateTime targetDate)
         {
+            // 所要時間をログに残す。「読み込み」（他システムとのロック待ちを含む）と
+            // 「採点・反映」のどちらに時間が掛かっているかを、次回から数字で追えるようにする
+            // （2026-10-25: 地方側で読み込み直前に約16分の空白があったが、原因を特定できなかった）。
+            var readTimer = System.Diagnostics.Stopwatch.StartNew();
             var open = _source.Open("RACE", EarlyAnchorFromTime, DataOption.ThisWeekAndToday);
             if (open.ReturnCode == -1)
             {
@@ -118,9 +122,39 @@ namespace KeibaDataCollector.Services
                 _source.Close();
             }
 
+            Console.WriteLine(
+                $"[{_source.SourceName}] RACE読み込み 所要 {readTimer.Elapsed.TotalMinutes:0.0}分" +
+                $"（{targetDate:yyyy-MM-dd}のレース {entriesByRace.Count}件を検出）");
+
+            var scoreTimer = System.Diagnostics.Stopwatch.StartNew();
             int published = 0, skipped = 0, failed = 0;
             foreach (var slug in entriesByRace.Keys)
             {
+                // 出走表（WordPressの投稿）が無いレースは、重い計算に入る前に見送る。
+                // 以前は全頭を計算してから投稿が無いと分かって捨てていた。出走表が出る前の
+                // 実行（0:00・3:00・6:00）は1レースごとに数分の計算を丸ごと捨てており、
+                // 1時間の上限を使い切る一因になっていた（2026-10-25のログで確認）。
+                bool postExists;
+                try
+                {
+                    postExists = _wp.RacePostExistsAsync(raceKeys[slug]).GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    Console.WriteLine(
+                        $"[{_source.SourceName}] {slug} 出走表の有無を確認できませんでした（このレースのみスキップして続行）: {ex.Message}");
+                    continue;
+                }
+                if (!postExists)
+                {
+                    skipped++;
+                    Console.WriteLine(
+                        $"[{_source.SourceName}] {slug} 出走表がWordPressにまだ無いため6ファクターの計算・反映を見送りました" +
+                        "（朝一バッチで出走表が作られた後、次回のscore実行で反映されます）");
+                    continue;
+                }
+
                 // スコア計算自体も1レース単位で保護する。以前はここが素通しで、
                 // FactorScoringService内の未知の例外（実機で発生: 特定コース条件の
                 // 母集団が0件になりSUM集計がNULLを返してInvalidCastExceptionになった
@@ -184,7 +218,8 @@ namespace KeibaDataCollector.Services
             if (failed > 0) notes.Add($"{failed}レースは送信失敗");
             var note = notes.Count > 0 ? $"（{string.Join("、", notes)}）" : "";
             Console.WriteLine(
-                $"[{_source.SourceName}] {targetDate:yyyy-MM-dd} 6ファクター算出 {published}レース 完了{note}");
+                $"[{_source.SourceName}] {targetDate:yyyy-MM-dd} 6ファクター算出 {published}レース 完了{note}" +
+                $" [採点・反映 所要 {scoreTimer.Elapsed.TotalMinutes:0.0}分]");
 
             // 送信失敗があった日は、次回のscore実行で拾い直せるよう終了コードに残す。
             if (failed > 0)
