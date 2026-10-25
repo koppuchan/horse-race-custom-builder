@@ -130,6 +130,16 @@ namespace KeibaDataCollector.WordPress
             return true;
         }
 
+        /// <summary>このレースの投稿（出走表）が既にWordPressにあるか。UpsertFactorsAsyncと同じ検索
+        /// （一時的なエラーは再送し、それでも駄目なら例外）を使う。
+        /// 6ファクターの計算は重いため、投稿が無いレース（朝一バッチで出走表が作られる前など）は
+        /// 計算に入る前にこれで見送る。以前は計算してから「投稿が無い」と分かって捨てており、
+        /// 出走表が出る前の実行は仕事を全部無駄にしていた。</summary>
+        public async Task<bool> RacePostExistsAsync(RaceKey key)
+        {
+            return await FindPostByRaceKeyAsync(key.AsSlug()) != null;
+        }
+
         /// <summary>6ファクター（hrc_factors、馬番=>{paramBias等}）をWordPressへ反映する。
         /// predictionsと同じ「馬番文字列キー」の取り決め。race_card等の既存メタは一切送らない
         /// （UpsertPredictionsAsyncと同じ理由: 別バッチが持つ項目を上書きしない）。
